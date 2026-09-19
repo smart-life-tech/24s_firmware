@@ -1,10 +1,11 @@
 /**
  * black_box.c — Offline Data Logger (Section 10)
  *
- * Writes to a 512KB NVS partition formatted as a FIFO ring buffer.
+ * Writes to a 512KB partition formatted as a FIFO ring buffer.
  * Fixed 64-byte records. Max 500 records (~8 hours at 60s intervals).
  * Runs from boot — no Wi-Fi required.
- * On MQTT reconnect, uploads full buffer as JSON array to hub/{id}/blackbox.
+ * On MQTT reconnect, publishes each buffered record as one JSON object to
+ * hub/{id}/blackbox, matching the current PWA expectations.
  */
 
 #include "black_box.h"

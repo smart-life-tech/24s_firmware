@@ -1,5 +1,5 @@
 /**
- * ltc6813.c — LTC6811-1 isoSPI Cell Monitor Driver
+ * ltc6811.c — LTC6811-1 isoSPI Cell Monitor Driver
  *
  * Final PCB hardware: two LTC6811-1 devices in daisy-chain,
  * 12 cells per device, 24 cells total. This driver reads the actual
@@ -17,7 +17,7 @@
 #include <string.h>
 #include <math.h>
 
-static const char *TAG = "LTC6813";
+static const char *TAG = "LTC6811";
 extern spi_device_handle_t g_spi_ltc;
 
 /* ----------------------------------------------------------------
@@ -154,7 +154,7 @@ static void parse_voltage_group(const uint8_t *reg, uint16_t *cell_a,
  * ---------------------------------------------------------------- */
 static int pec_fail_count[2] = {0, 0};
 
-esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
+esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out)
 {
     ltc_wake();
 
@@ -213,13 +213,18 @@ esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
     return ESP_OK;
 }
 
+esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
+{
+    return ltc6811_read_all_cells(cell_mv_out);
+}
+
 /* ----------------------------------------------------------------
  *  Self-test: read all cells and verify plausible range
  * ---------------------------------------------------------------- */
-esp_err_t ltc6813_self_test(void)
+esp_err_t ltc6811_self_test(void)
 {
     uint16_t cells[CELL_COUNT];
-    esp_err_t ret = ltc6813_read_all_cells(cells);
+    esp_err_t ret = ltc6811_read_all_cells(cells);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Self-test: isoSPI read failed");
         return ret;
@@ -232,6 +237,11 @@ esp_err_t ltc6813_self_test(void)
     }
     ESP_LOGI(TAG, "Self-test: all 24 cells in range");
     return ESP_OK;
+}
+
+esp_err_t ltc6813_self_test(void)
+{
+    return ltc6811_self_test();
 }
 
 /* ----------------------------------------------------------------

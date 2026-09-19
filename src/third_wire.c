@@ -40,6 +40,9 @@ static void save_mode_to_nvs(op_mode_t mode, uint32_t duty)
 
 static void load_mode_from_nvs(op_mode_t *mode, uint32_t *duty)
 {
+    /* Safe boot policy: do not restore a prior active output state.
+     * NVS data is intentionally ignored until a valid command is received.
+     */
     (void)mode;
     (void)duty;
     *mode = MODE_OFF;
