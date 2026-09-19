@@ -142,6 +142,7 @@ typedef struct {
     int8_t            wifi_rssi;
     uint32_t          soc_percent_x10;
     uint32_t          retry_count;
+    bool              pwm_remote_override;
     bool              fault_active;
     uint32_t          ov_mv;
     uint32_t          uv_mv;

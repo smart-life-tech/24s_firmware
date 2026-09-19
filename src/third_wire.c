@@ -114,7 +114,7 @@ void third_wire_task(void *arg)
         if (!g_sys.boot_complete || g_sys.permanent_fault) {
             continue;
         }
-        if (g_sys.op_mode == MODE_PWM_50) {
+        if (g_sys.op_mode == MODE_PWM_50 && !g_sys.pwm_remote_override) {
             pwm_apply_pot();
         }
     }
@@ -129,10 +129,19 @@ void third_wire_set_mode_from_mqtt(const char *action)
 
     if (strcmp(action, "ON") == 0) {
         mode = MODE_FULL_POWER;
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        g_sys.pwm_remote_override = false;
+        xSemaphoreGive(g_state_mutex);
     } else if (strcmp(action, "OFF") == 0) {
         mode = MODE_OFF;
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        g_sys.pwm_remote_override = false;
+        xSemaphoreGive(g_state_mutex);
     } else if (strcmp(action, "PWM") == 0) {
         mode = MODE_PWM_50;
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        g_sys.pwm_remote_override = true;
+        xSemaphoreGive(g_state_mutex);
     }
 
     apply_mode(mode, duty);
@@ -148,6 +157,7 @@ void third_wire_set_pwm_duty(uint32_t duty_pct)
                      (duty_pct >= 100U) ? MODE_FULL_POWER : MODE_PWM_50;
     g_sys.pwm_duty_pct = duty_pct;
     g_sys.op_mode = mode;
+    g_sys.pwm_remote_override = true;
     xSemaphoreGive(g_state_mutex);
 
     if (mode == MODE_OFF) {

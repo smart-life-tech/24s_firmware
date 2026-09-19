@@ -13,6 +13,8 @@ idf_component_register(
         "scp_recovery.c"
         "third_wire.c"
         "pwm_mode.c"
+        "subsystems.c"
+        "ina240.c"
         "black_box.c"
         "mqtt_telemetry.c"
         "wifi_manager.c"

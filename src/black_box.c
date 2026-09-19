@@ -238,6 +238,7 @@ static const char *bb_event_name(uint16_t event_type)
     switch (event_type) {
     case 0x0001: return "TELEMETRY_SNAPSHOT";
     case 0x0002: return "INA240_FAIL";
+    case 0x0010: return "GATE_CHANGE";
     case 0x0020: return "SCP_TRIP";
     case 0x0021: return "SCP_RECOVERY";
     case 0x0022: return "SCP_PERMANENT";

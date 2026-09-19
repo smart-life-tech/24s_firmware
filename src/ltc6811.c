@@ -6,7 +6,7 @@
  * 2 x 12-cell chain rather than the stale 18-cell assumption.
  */
 
-#include "ltc6813.h"
+#include "ltc6811.h"
 #include "config.h"
 #include "hardware_init.h"
 #include "black_box.h"
@@ -21,27 +21,38 @@ static const char *TAG = "LTC6813";
 extern spi_device_handle_t g_spi_ltc;
 
 /* ----------------------------------------------------------------
- *  PEC (15-bit CRC) — LTC6813-1 datasheet Table 4
+ *  PEC (15-bit CRC) — LTC6811-1 reference implementation
  * ---------------------------------------------------------------- */
-static const uint16_t pec15_table[256] = {
-    /* Pre-computed CRC table — standard LTC PEC15 */
-    0x0000,0xC599,0xCEAB,0x0B32,0xD8CF,0x1D56,0x1664,0xD3FD,
-    /* ... (full 256-entry table would be here) */
-    /* For brevity we compute dynamically below */
-};
+static uint16_t pec15_table[256];
+static void init_pec15_table(void)
+{
+    static bool initialized = false;
+    if (initialized) return;
+
+    for (int i = 0; i < 256; i++) {
+        uint16_t remainder = (uint16_t)(i << 7);
+        for (int bit = 0; bit < 8; bit++) {
+            if (remainder & 0x4000) {
+                remainder = (uint16_t)((remainder << 1) ^ 0x4599);
+            } else {
+                remainder = (uint16_t)(remainder << 1);
+            }
+            remainder &= 0x7FFF;
+        }
+        pec15_table[i] = remainder;
+    }
+    initialized = true;
+}
 
 static uint16_t pec15_calc(const uint8_t *data, int len)
 {
-    uint16_t pec = 16;  /* seed */
+    init_pec15_table();
+    uint16_t remainder = 16;
     for (int i = 0; i < len; i++) {
-        uint8_t in = data[i] ^ (uint8_t)(pec >> 7);
-        /* Standard LTC PEC15 polynomial: 0x4599 */
-        for (int j = 0; j < 8; j++) {
-            pec = (pec << 1) ^ ((pec & 0x4000) ? 0x4599 : 0);
-        }
-        pec ^= in;
+        uint8_t index = (uint8_t)(((remainder >> 7) ^ data[i]) & 0xFF);
+        remainder = (uint16_t)(((remainder << 8) ^ pec15_table[index]) & 0x7FFF);
     }
-    return pec & 0x7FFF;
+    return remainder;
 }
 
 /* ----------------------------------------------------------------
@@ -90,28 +101,27 @@ static esp_err_t ltc_send_command(uint16_t cmd)
 static esp_err_t ltc_read_register(uint16_t cmd, uint8_t *data_ic1,
                                     uint8_t *data_ic2)
 {
-    uint8_t tx[4] = {0};
+    uint8_t tx[24] = {0};
+    uint8_t rx[24] = {0};
     tx[0] = (cmd >> 8) & 0xFF;
     tx[1] = cmd & 0xFF;
     uint16_t pec = pec15_calc(tx, 2);
     tx[2] = (pec >> 8) & 0xFF;
     tx[3] = pec & 0xFF;
 
-    /* Daisy-chain: 4 cmd bytes + (6 data + 2 PEC) × 2 ICs = 20 bytes total */
-    uint8_t rx[20] = {0};
+    /* Send the 4-byte command and read back 20 bytes of register data. */
     spi_transaction_t t = {
         .tx_buffer = tx,
         .rx_buffer = rx,
-        .length    = 160,   // 20 bytes × 8 bits
+        .length    = sizeof(tx) * 8,
     };
     esp_err_t ret = spi_device_transmit(g_spi_ltc, &t);
     if (ret != ESP_OK) return ret;
 
-    /* IC2 data comes first in daisy-chain, IC1 last */
-    memcpy(data_ic2, rx + 4,  6);
+    /* Daisy-chain: IC2 data first, IC1 data last */
+    memcpy(data_ic2, rx + 4, 6);
     memcpy(data_ic1, rx + 12, 6);
 
-    /* Verify PEC for both */
     uint16_t pec_rx2 = (rx[10] << 8) | rx[11];
     uint16_t pec_rx1 = (rx[18] << 8) | rx[19];
     if (pec15_calc(data_ic2, 6) != pec_rx2) return ESP_ERR_INVALID_CRC;

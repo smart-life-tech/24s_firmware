@@ -23,7 +23,7 @@
 
 #include "config.h"
 #include "hardware_init.h"
-#include "ltc6813.h"
+#include "ltc6811.h"
 #include "ina240.h"
 #include "scp_recovery.h"
 #include "third_wire.h"
@@ -41,6 +41,7 @@ system_state_t g_sys = {
     .permanent_fault  = false,
     .wifi_connected   = false,
     .boot_complete    = false,
+    .pwm_remote_override = false,
 };
 
 SemaphoreHandle_t g_state_mutex;
