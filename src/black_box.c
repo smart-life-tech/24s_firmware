@@ -185,6 +185,19 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
+    if (bb_hdr.count >= BB_MAX_RECORDS) {
+        uint32_t erase_start = 0U;
+        uint32_t erase_size = 0U;
+        uint32_t erase_size_raw = esp_partition_get_erase_size(bb_partition, 0);
+        if (erase_size_raw > 0U) {
+            erase_start = erase_size_raw;
+            erase_size = bb_partition->size - erase_start;
+            esp_partition_erase_range(bb_partition, erase_start, erase_size);
+        }
+        bb_hdr.write_idx = 0;
+        bb_hdr.count = 0;
+    }
+
     bb_record_t rec = {0};
     rec.timestamp       = (uint32_t)(time(NULL));
     rec.event_type      = event_type;

@@ -244,12 +244,6 @@ esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out)
     return ESP_OK;
 }
 
-/* Deprecated compatibility wrapper retained for legacy callers. */
-esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
-{
-    return ltc6811_read_all_cells(cell_mv_out);
-}
-
 /* ----------------------------------------------------------------
  *  Self-test: read all cells and verify plausible range
  * ---------------------------------------------------------------- */
@@ -269,12 +263,6 @@ esp_err_t ltc6811_self_test(void)
     }
     ESP_LOGI(TAG, "Self-test: all 24 cells in range");
     return ESP_OK;
-}
-
-/* Deprecated compatibility wrapper retained for legacy callers. */
-esp_err_t ltc6813_self_test(void)
-{
-    return ltc6811_self_test();
 }
 
 /* ----------------------------------------------------------------
@@ -447,6 +435,8 @@ static void check_thresholds(const uint16_t *cells)
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     uint32_t ov = g_sys.ov_mv;
     uint32_t uv = g_sys.uv_mv;
+    uint32_t oc_ma = g_sys.oc_ma;
+    int32_t pack_current_ma = g_sys.pack_current_ma;
     xSemaphoreGive(g_state_mutex);
 
     uint32_t pack_total_mv = 0;
@@ -455,11 +445,13 @@ static void check_thresholds(const uint16_t *cells)
         pack_total_mv += cells[i];
         if (cells[i] >= ov) {
             cell_fault = true;
+            g_sys.fault_active = true;
             ESP_LOGW(TAG, "Cell %d OV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_OV, i, cells[i]);
             mqtt_publish_fault("CELL_OV", 0);
         } else if (cells[i] <= uv) {
             cell_fault = true;
+            g_sys.fault_active = true;
             ESP_LOGW(TAG, "Cell %d UV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_UV, i, cells[i]);
             mqtt_publish_fault("CELL_UV", 0);
@@ -470,7 +462,16 @@ static void check_thresholds(const uint16_t *cells)
         gate_hold_off();
     }
 
+    if (oc_ma > 0U && pack_current_ma > (int32_t)oc_ma) {
+        g_sys.fault_active = true;
+        gate_hold_off();
+        ESP_LOGE(TAG, "Over-current trip: %ld mA > %u mA", (long)pack_current_ma, oc_ma);
+        black_box_write_fault(FAULT_SCP_TRIP, pack_current_ma, pack_total_mv);
+        mqtt_publish_fault("OC_LIMIT", pack_current_ma);
+    }
+
     if (pack_total_mv >= PACK_CUTOFF_MV) {
+        g_sys.fault_active = true;
         ESP_LOGE(TAG, "Pack cutoff reached: %u mV >= %u mV", pack_total_mv, PACK_CUTOFF_MV);
         gate_hold_off();
         black_box_write_fault(FAULT_PACK_OV, 0, pack_total_mv);
