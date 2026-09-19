@@ -74,8 +74,10 @@ static esp_err_t hdr_read(void)
 static esp_err_t hdr_write(void)
 {
     bb_hdr.crc = header_crc(&bb_hdr);
-    /* Must erase sector before write on flash */
-    esp_partition_erase_range(bb_partition, 0, BB_HEADER_SIZE);
+    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
+    if (erase_size > 0) {
+        esp_partition_erase_range(bb_partition, 0, erase_size);
+    }
     return esp_partition_write(bb_partition, 0, &bb_hdr, sizeof(bb_hdr));
 }
 
@@ -142,10 +144,19 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
     }
 
     uint32_t offset = record_offset(bb_hdr.write_idx);
+    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, offset);
+    uint32_t sector_base = 0U;
 
-    /* Erase sector if at sector boundary (sector = 4096 bytes) */
-    if (offset % 4096 == 0) {
-        esp_partition_erase_range(bb_partition, offset, 4096);
+    if (erase_size > 0U) {
+        sector_base = (offset / erase_size) * erase_size;
+    }
+
+    /*
+     * Records start at offset 16; the first record in the next erase sector is
+     * therefore located at offset % erase_size == BB_HEADER_SIZE, not 0.
+     */
+    if (erase_size > 0U && ((offset % erase_size) == BB_HEADER_SIZE)) {
+        esp_partition_erase_range(bb_partition, sector_base, erase_size);
     }
 
     esp_partition_write(bb_partition, offset, &rec, sizeof(rec));

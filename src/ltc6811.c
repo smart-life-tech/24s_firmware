@@ -163,6 +163,9 @@ esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
     uint16_t cells[CELL_COUNT] = {0};
     int out_idx = 0;
 
+    uint16_t ic1_groups[4][3] = {{0}};
+    uint16_t ic2_groups[4][3] = {{0}};
+
     for (int g = 0; g < 4; g++) {
         uint8_t ic1[6] = {0};
         uint8_t ic2[6] = {0};
@@ -178,12 +181,24 @@ esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
         parse_voltage_group(ic1, &d1_a, &d1_b, &d1_c);
         parse_voltage_group(ic2, &d2_a, &d2_b, &d2_c);
 
-        cells[out_idx++] = d1_a;
-        cells[out_idx++] = d1_b;
-        cells[out_idx++] = d1_c;
-        cells[out_idx++] = d2_a;
-        cells[out_idx++] = d2_b;
-        cells[out_idx++] = d2_c;
+        ic1_groups[g][0] = d1_a;
+        ic1_groups[g][1] = d1_b;
+        ic1_groups[g][2] = d1_c;
+        ic2_groups[g][0] = d2_a;
+        ic2_groups[g][1] = d2_b;
+        ic2_groups[g][2] = d2_c;
+    }
+
+    for (int g = 0; g < 4; g++) {
+        cells[out_idx++] = ic1_groups[g][0];
+        cells[out_idx++] = ic1_groups[g][1];
+        cells[out_idx++] = ic1_groups[g][2];
+    }
+
+    for (int g = 0; g < 4; g++) {
+        cells[out_idx++] = ic2_groups[g][0];
+        cells[out_idx++] = ic2_groups[g][1];
+        cells[out_idx++] = ic2_groups[g][2];
     }
 
     if (out_idx != CELL_COUNT) {
@@ -225,20 +240,33 @@ esp_err_t ltc6813_self_test(void)
 
 static void balancing_update(const uint16_t *cells)
 {
-    (void)cells;
+    if (cells == NULL) {
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        for (int i = 0; i < CELL_COUNT; i++) {
+            g_sys.cell_balancing[i] = false;
+        }
+        xSemaphoreGive(g_state_mutex);
+        return;
+    }
 
-    /*
-     * The final PCB balancing circuit has not been validated from the netlist here,
-     * and the legacy GPIO-based 24-output driver is not safe to assume. Leave the
-     * balancing state in a disabled mode until the actual hardware mapping is
-     * explicitly confirmed by the PCB design.
-     */
+    uint32_t total_mv = 0U;
+    for (int i = 0; i < CELL_COUNT; i++) {
+        total_mv += cells[i];
+    }
+    uint32_t avg_mv = total_mv / CELL_COUNT;
+
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     for (int i = 0; i < CELL_COUNT; i++) {
-        g_sys.cell_balancing[i] = false;
+        g_sys.cell_balancing[i] = (cells[i] > (avg_mv + BAL_DELTA_MV));
     }
     xSemaphoreGive(g_state_mutex);
-    ESP_LOGW(TAG, "Balancing disabled until PCB balancing netlist is reconciled");
+
+    uint32_t active = 0;
+    for (int i = 0; i < CELL_COUNT; i++) {
+        if (g_sys.cell_balancing[i]) active++;
+    }
+    ESP_LOGI(TAG, "Passive balancing target: %lu cells above average by %d mV",
+             (unsigned long)active, BAL_DELTA_MV);
 }
 
 /* ----------------------------------------------------------------

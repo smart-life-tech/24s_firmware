@@ -42,17 +42,20 @@ static void load_mode_from_nvs(op_mode_t *mode, uint32_t *duty)
 {
     nvs_handle_t h;
     *mode = MODE_OFF;
-    *duty = 50;
+    *duty = 0;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
-        uint8_t m = 0;
-        uint32_t d = 50;
+        uint8_t m = (uint8_t)MODE_OFF;
+        uint32_t d = 0U;
         nvs_get_u8(h, NVS_KEY_MODE, &m);
         nvs_get_u32(h, NVS_KEY_DUTY, &d);
         *mode = (op_mode_t)m;
         *duty = d;
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "Restored mode %d, duty %d%% from NVS", *mode, *duty);
+    /* Safe default is OFF on boot; a new command is required to energize the output. */
+    *mode = MODE_OFF;
+    *duty = 0U;
+    ESP_LOGI(TAG, "Boot default restored to OFF: duty %d%%", *duty);
 }
 
 static void apply_mode(op_mode_t mode, uint32_t duty_pct)
@@ -99,12 +102,12 @@ void third_wire_task(void *arg)
     load_mode_from_nvs(&mode, &duty);
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    g_sys.op_mode = mode;
-    g_sys.pwm_duty_pct = duty;
+    g_sys.op_mode = MODE_OFF;
+    g_sys.pwm_duty_pct = 0U;
     xSemaphoreGive(g_state_mutex);
 
     if (g_sys.boot_complete) {
-        apply_mode(mode, duty);
+        apply_mode(MODE_OFF, 0U);
     }
 
     ESP_LOGI(TAG, "Gate control task running, current mode: %d", mode);
