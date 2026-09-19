@@ -26,7 +26,7 @@
 
 #define PIN_POT_ADC_CH      ADC1_CHANNEL_7   // GPIO8
 #define PIN_POT_ADC_GPIO    GPIO_NUM_8
-#define MASTER_SWITCH_GPIO  PIN_GATE_CTRL
+#define MASTER_SWITCH_GPIO  GPIO_NUM_NC
 
 #define POT_OVERSAMPLE_N    32
 #define POT_DEADBAND_LOW    82
@@ -65,6 +65,7 @@ typedef enum {
 
 #define BAL_DELTA_MV        30
 #define BAL_STOP_MV         15
+#define PACK_CUTOFF_MV      93000U
 #define CELL_COUNT          24
 #define NTC_COUNT           4
 
@@ -158,6 +159,7 @@ typedef enum {
     FAULT_SCP_PERMANENT     = 0x0022,
     FAULT_CELL_OV           = 0x0030,
     FAULT_CELL_UV           = 0x0031,
+    FAULT_PACK_OV           = 0x0032,
     FAULT_TEMP_WARN         = 0x0040,
     FAULT_TEMP_SHUTDOWN     = 0x0041,
 } fault_type_t;

@@ -194,10 +194,12 @@ void black_box_write_fault(fault_type_t fault, int32_t peak_current,
     case FAULT_SCP_TRIP:       ev = 0x0020; break;
     case FAULT_SCP_RECOVERY:   ev = 0x0021; break;
     case FAULT_SCP_PERMANENT:  ev = 0x0022; break;
-    case FAULT_CELL_OV:
-    case FAULT_CELL_UV:        ev = 0x0030; break;
-    case FAULT_TEMP_WARN:
-    case FAULT_TEMP_SHUTDOWN:  ev = 0x0040; break;
+    case FAULT_CELL_OV:        ev = 0x0030; break;
+    case FAULT_CELL_UV:        ev = 0x0031; break;
+    case FAULT_PACK_OV:        ev = 0x0032; break;
+    case FAULT_TEMP_WARN:      ev = 0x0040; break;
+    case FAULT_TEMP_SHUTDOWN:  ev = 0x0041; break;
+    case FAULT_INA240_FAIL:    ev = 0x0002; break;
     default:                   ev = 0x0000; break;
     }
     bb_write_record(ev, peak_current, voltage_mv,
@@ -223,7 +225,8 @@ void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
 
 void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)
 {
-    bb_write_record(0x0040, sensor_idx, (uint32_t)(temp_c * 10),
+    uint16_t event_code = (temp_c >= TEMP_SHUTDOWN_C) ? 0x0041 : 0x0040;
+    bb_write_record(event_code, sensor_idx, (uint32_t)(temp_c * 10),
                     0, NULL, (uint8_t)temp_c);
 }
 
@@ -233,15 +236,17 @@ void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)
 static const char *bb_event_name(uint16_t event_type)
 {
     switch (event_type) {
-    case 0x0001: return "CELL_MONITOR_FAIL";
+    case 0x0001: return "TELEMETRY_SNAPSHOT";
     case 0x0002: return "INA240_FAIL";
     case 0x0020: return "SCP_TRIP";
     case 0x0021: return "SCP_RECOVERY";
     case 0x0022: return "SCP_PERMANENT";
     case 0x0030: return "CELL_OV";
     case 0x0031: return "CELL_UV";
+    case 0x0032: return "PACK_OV";
     case 0x0040: return "TEMP_WARN";
     case 0x0041: return "TEMP_SHUTDOWN";
+    case 0x0050: return "BOOT";
     default:     return "UNKNOWN";
     }
 }

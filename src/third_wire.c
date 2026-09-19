@@ -144,13 +144,21 @@ void third_wire_set_pwm_duty(uint32_t duty_pct)
     if (duty_pct > 100) duty_pct = 100;
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    op_mode_t mode = (duty_pct == 0U) ? MODE_OFF :
+                     (duty_pct >= 100U) ? MODE_FULL_POWER : MODE_PWM_50;
     g_sys.pwm_duty_pct = duty_pct;
-    op_mode_t mode = g_sys.op_mode;
+    g_sys.op_mode = mode;
     xSemaphoreGive(g_state_mutex);
 
-    if (mode == MODE_PWM_50) {
+    if (mode == MODE_OFF) {
+        apply_mode(MODE_OFF, 0U);
+    } else if (mode == MODE_FULL_POWER) {
+        apply_mode(MODE_FULL_POWER, 100U);
+    } else {
         pwm_set_duty(duty_pct);
-        save_mode_to_nvs(mode, duty_pct);
+        apply_mode(MODE_PWM_50, duty_pct);
     }
-    ESP_LOGI(TAG, "PWM duty updated to %d%%", duty_pct);
+
+    save_mode_to_nvs(mode, duty_pct);
+    ESP_LOGI(TAG, "PWM duty updated to %d%% (mode %d)", duty_pct, mode);
 }

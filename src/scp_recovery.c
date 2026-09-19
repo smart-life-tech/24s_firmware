@@ -224,26 +224,22 @@ void scp_recovery_task(void *arg)
         g_sys.scp_state = SCP_STATE_RETRY_PROBE;
         xSemaphoreGive(g_state_mutex);
 
-        uint32_t probe_mv = g_sys.pack_voltage_mv;
-        uint32_t nominal_mv = (g_sys.pack_voltage_mv > 0U) ? g_sys.pack_voltage_mv : 72000U;
-        uint32_t threshold_mv = (nominal_mv * SCP_PROBE_SHORTED_PCT) / 100;
+        int32_t probe_current = ina240_read_current_ma();
+        uint32_t abs_probe_current = (probe_current < 0) ? (uint32_t)(-probe_current) : (uint32_t)probe_current;
 
-        ESP_LOGI(TAG, "Retry probe: pack voltage %d mV, threshold %d mV",
-                 probe_mv, threshold_mv);
+        ESP_LOGI(TAG, "Retry probe: current %d mA", probe_current);
 
-        black_box_write_recovery_attempt(g_sys.retry_count, probe_mv);
+        black_box_write_recovery_attempt(g_sys.retry_count, abs_probe_current);
 
-        if (probe_mv < threshold_mv) {
+        if (abs_probe_current > 2000U) {
             /* Load still shorted — back to recovery wait */
-            ESP_LOGW(TAG, "Load still shorted — waiting another 10s");
-            mqtt_publish_fault("PROBE_SHORTED", probe_mv);
+            ESP_LOGW(TAG, "Load still shorted: current %d mA > 2000 mA", probe_current);
+            mqtt_publish_fault("PROBE_SHORTED", probe_current);
             xQueueSend(scp_evt_queue, &evt, 0);  // re-queue to stay in loop
-            /* Re-enter recovery wait without incrementing trip count */
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             g_sys.scp_state = SCP_STATE_RECOVERY_WAIT;
             xSemaphoreGive(g_state_mutex);
             vTaskDelay(pdMS_TO_TICKS(SCP_RECOVERY_WAIT_MS));
-            /* Probe again next iteration — simplify: just re-loop */
             continue;
         }
 

@@ -136,9 +136,6 @@ void mqtt_handle_command(const char *topic, int topic_len,
         if (cJSON_IsNumber(duty)) {
             uint32_t d = (uint32_t)duty->valuedouble;
             third_wire_set_pwm_duty(d);
-            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.pwm_duty_pct = d;
-            xSemaphoreGive(g_state_mutex);
         }
     }
     /* hub/{id}/cmd/reset_fault */

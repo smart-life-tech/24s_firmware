@@ -87,7 +87,7 @@ uint32_t pot_read_duty_pct(void)
         if (duty_pct < 1U)   duty_pct = 1U;
     }
 
-    if (gpio_get_level(MASTER_SWITCH_GPIO) == 1) {
+    if (MASTER_SWITCH_GPIO >= 0 && gpio_get_level(MASTER_SWITCH_GPIO) == 1) {
         ESP_LOGD(TAG, "pot: Master Switch HIGH : duty forced 100%%");
         return 100U;
     }

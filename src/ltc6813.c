@@ -211,40 +211,24 @@ esp_err_t ltc6813_self_test(void)
  *  Turns on BSS308PE FET for cells >30mV above average
  *  Turns off when <15mV above average
  * ---------------------------------------------------------------- */
-#define BSS308_GPIO_BASE   GPIO_NUM_20   // GPIO 20-43 for 24 cells
+#define BSS308_GPIO_BASE   GPIO_NUM_20
 
 static void balancing_update(const uint16_t *cells)
 {
-    /* Calculate pack average */
-    uint32_t sum = 0;
-    for (int i = 0; i < CELL_COUNT; i++) sum += cells[i];
-    uint16_t avg = sum / CELL_COUNT;
+    (void)cells;
 
+    /*
+     * The final PCB balancing circuit has not been validated from the netlist here,
+     * and the legacy GPIO-based 24-output driver is not safe to assume. Leave the
+     * balancing state in a disabled mode until the actual hardware mapping is
+     * explicitly confirmed by the PCB design.
+     */
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    uint32_t bal_thresh = g_sys.bal_delta_mv;
-    xSemaphoreGive(g_state_mutex);
-
     for (int i = 0; i < CELL_COUNT; i++) {
-        int32_t delta = (int32_t)cells[i] - avg;
-        bool currently_balancing = g_sys.cell_balancing[i];
-
-        bool should_balance;
-        if (!currently_balancing) {
-            should_balance = delta > (int32_t)bal_thresh;  // 30mV trigger
-        } else {
-            should_balance = delta > (int32_t)(BAL_STOP_MV);  // 15mV stop
-        }
-
-        if (should_balance != currently_balancing) {
-            gpio_set_level(BSS308_GPIO_BASE + i, should_balance ? 1 : 0);
-            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.cell_balancing[i] = should_balance;
-            xSemaphoreGive(g_state_mutex);
-            if (should_balance) {
-                ESP_LOGD(TAG, "Balancing ON cell %d (delta %d mV)", i+1, delta);
-            }
-        }
+        g_sys.cell_balancing[i] = false;
     }
+    xSemaphoreGive(g_state_mutex);
+    ESP_LOGW(TAG, "Balancing disabled until PCB balancing netlist is reconciled");
 }
 
 /* ----------------------------------------------------------------
@@ -284,7 +268,9 @@ static void check_thresholds(const uint16_t *cells)
     uint32_t uv = g_sys.uv_mv;
     xSemaphoreGive(g_state_mutex);
 
+    uint32_t pack_total_mv = 0;
     for (int i = 0; i < CELL_COUNT; i++) {
+        pack_total_mv += cells[i];
         if (cells[i] >= ov) {
             ESP_LOGW(TAG, "Cell %d OV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_OV, i, cells[i]);
@@ -294,6 +280,13 @@ static void check_thresholds(const uint16_t *cells)
             black_box_write_cell_threshold(FAULT_CELL_UV, i, cells[i]);
             mqtt_publish_fault("CELL_UV", 0);
         }
+    }
+
+    if (pack_total_mv >= PACK_CUTOFF_MV) {
+        ESP_LOGE(TAG, "Pack cutoff reached: %u mV >= %u mV", pack_total_mv, PACK_CUTOFF_MV);
+        gate_hold_off();
+        black_box_write_fault(FAULT_PACK_OV, 0, pack_total_mv);
+        mqtt_publish_fault("PACK_OV", 0);
     }
 }
 
