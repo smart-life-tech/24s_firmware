@@ -248,44 +248,123 @@ esp_err_t ltc6813_self_test(void)
 }
 
 /* ----------------------------------------------------------------
- *  Passive cell balancing
- *  Turns on BSS308PE FET for cells >30mV above average
- *  Turns off when <15mV above average
+ *  Passive cell balancing via LTC6811 DCC1..DCC12 outputs
+ *
+ *  The final PCB does not use ESP32 GPIOs for individual cell balancing.
+ *  Each LTC6811 Sx pin drives an external BSS308PE P-MOSFET through a
+ *  3.3 kΩ gate resistor, and each MOSFET discharges its cell through a
+ *  100 Ω resistor. The firmware therefore controls the DCC bits in the
+ *  LTC6811 configuration register rather than toggling GPIOs.
  * ---------------------------------------------------------------- */
-#define BSS308_GPIO_BASE   GPIO_NUM_20
+static uint16_t g_balance_mask_u19 = 0U;
+static uint16_t g_balance_mask_u23 = 0U;
+
+static esp_err_t ltc6811_write_config(const uint8_t cfg_u19[6], const uint8_t cfg_u23[6])
+{
+    ltc_wake();
+
+    uint8_t tx[20] = {0};
+
+    tx[0] = (CMD_WRCFGA >> 8) & 0xFFU;
+    tx[1] = CMD_WRCFGA & 0xFFU;
+    uint16_t pec = pec15_calc(tx, 2);
+    tx[2] = (pec >> 8) & 0xFFU;
+    tx[3] = pec & 0xFFU;
+
+    /* The stacked LTC6811 is transmitted first, followed by the primary device.
+     * This matches the daisy-chain ordering used for the 24-cell stack.
+     */
+    memcpy(&tx[4], cfg_u23, 6);
+    pec = pec15_calc(&tx[4], 6);
+    tx[10] = (pec >> 8) & 0xFFU;
+    tx[11] = pec & 0xFFU;
+
+    memcpy(&tx[12], cfg_u19, 6);
+    pec = pec15_calc(&tx[12], 6);
+    tx[18] = (pec >> 8) & 0xFFU;
+    tx[19] = pec & 0xFFU;
+
+    spi_transaction_t t = {
+        .tx_buffer = tx,
+        .length    = sizeof(tx) * 8,
+    };
+
+    return spi_device_transmit(g_spi_ltc, &t);
+}
+
+static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23)
+{
+    if (mask_u19 == g_balance_mask_u19 && mask_u23 == g_balance_mask_u23) {
+        return ESP_OK;
+    }
+
+    uint8_t cfg_u19[6] = {0};
+    uint8_t cfg_u23[6] = {0};
+
+    /* DCC bits are stored in CFGR4 and CFGR5.
+     * CFGR4 bits[0:7] = DCC1..DCC8
+     * CFGR5 bits[0:3] = DCC9..DCC12, bits[4:7] = DCTO
+     */
+    cfg_u19[4] = (uint8_t)(mask_u19 & 0xFFU);
+    cfg_u19[5] = (uint8_t)(((0U & 0x0FU) << 4) | ((mask_u19 >> 8) & 0x0FU));
+
+    cfg_u23[4] = (uint8_t)(mask_u23 & 0xFFU);
+    cfg_u23[5] = (uint8_t)(((0U & 0x0FU) << 4) | ((mask_u23 >> 8) & 0x0FU));
+
+    esp_err_t ret = ltc6811_write_config(cfg_u19, cfg_u23);
+    if (ret == ESP_OK) {
+        g_balance_mask_u19 = mask_u19;
+        g_balance_mask_u23 = mask_u23;
+    }
+    return ret;
+}
 
 static void balancing_update(const uint16_t *cells)
 {
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    for (int i = 0; i < CELL_COUNT; i++) {
-        g_sys.cell_balancing[i] = false;
-    }
-    xSemaphoreGive(g_state_mutex);
-
     if (cells == NULL) {
         ESP_LOGW(TAG, "Balancing disabled: no valid cell set available");
         return;
     }
 
-    /*
-     * The PCB balancing netlist is not yet confirmed in firmware-controlled hardware.
-     * The safe behavior is to keep all LTC balancing channels off until the board-level
-     * enable mapping is validated, but continue exposing the delta-based decision state.
-     */
     uint32_t total_mv = 0U;
     for (int i = 0; i < CELL_COUNT; i++) {
         total_mv += cells[i];
     }
     uint32_t avg_mv = total_mv / CELL_COUNT;
 
-    uint32_t active = 0U;
+    uint16_t mask_u19 = g_balance_mask_u19;
+    uint16_t mask_u23 = g_balance_mask_u23;
+
     for (int i = 0; i < CELL_COUNT; i++) {
-        bool should_balance = (cells[i] > (avg_mv + BAL_DELTA_MV));
-        if (should_balance) active++;
-        (void)should_balance;
+        bool currently_on = (i < 12) ? ((mask_u19 >> i) & 1U) : ((mask_u23 >> (i - 12)) & 1U);
+        bool turn_on = cells[i] > (avg_mv + BAL_DELTA_MV);
+        bool turn_off = cells[i] < (avg_mv + BAL_STOP_MV);
+        bool enable = currently_on ? !turn_off : turn_on;
+
+        if (i < 12) {
+            if (enable) {
+                mask_u19 |= (1U << i);
+            } else {
+                mask_u19 &= ~(1U << i);
+            }
+        } else {
+            int n = i - 12;
+            if (enable) {
+                mask_u23 |= (1U << n);
+            } else {
+                mask_u23 &= ~(1U << n);
+            }
+        }
+
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        g_sys.cell_balancing[i] = enable;
+        xSemaphoreGive(g_state_mutex);
     }
-    ESP_LOGW(TAG, "Balancing remains disabled until PCB balancing netlist is confirmed; %lu cells were above avg by %d mV",
-             (unsigned long)active, BAL_DELTA_MV);
+
+    esp_err_t ret = ltc6811_set_balance_masks(mask_u19, mask_u23);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Balance config write failed: %s", esp_err_to_name(ret));
+    }
 }
 
 /* ----------------------------------------------------------------
