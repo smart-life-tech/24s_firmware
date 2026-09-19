@@ -19,7 +19,6 @@
 #include "third_wire.h"
 #include "scp_recovery.h"
 #include "black_box.h"
-#include "cell_monitor.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "mqtt_client.h"
@@ -193,7 +192,7 @@ static void publish_telemetry(void)
         "\"pack_current_ma\":%d,"
         "\"soc_percent\":%.1f,"
         "\"temp_avg_c\":%.1f,"
-        "\"temp_sensors_c\":[%.1f,%.1f,%.1f],"
+        "\"temp_sensors_c\":[%.1f,%.1f,%.1f,%.1f],"
         "\"gate_state\":\"%s\","
         "\"pwm_duty_percent\":%u,"
         "\"fault_active\":%s,"
@@ -206,7 +205,7 @@ static void publish_telemetry(void)
         snap.pack_current_ma,
         snap.soc_percent_x10 / 10.0f,
         snap.temp_avg_c,
-        snap.temp_sensors_c[0], snap.temp_sensors_c[1], snap.temp_sensors_c[2],
+        snap.temp_sensors_c[0], snap.temp_sensors_c[1], snap.temp_sensors_c[2], snap.temp_sensors_c[3],
         gate_str,
         snap.pwm_duty_pct,
         snap.fault_active ? "true" : "false",

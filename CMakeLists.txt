@@ -15,7 +15,7 @@ idf_component_register(
         "pwm_mode.c"
         "black_box.c"
         "mqtt_telemetry.c"
-        "subsystems.c"
+        "wifi_manager.c"
     INCLUDE_DIRS "."
     REQUIRES
         driver

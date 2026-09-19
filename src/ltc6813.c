@@ -266,18 +266,25 @@ static void balancing_update(const uint16_t *cells)
  * ---------------------------------------------------------------- */
 static float ntc_read_temperature(int sensor_idx)
 {
-    /* Steinhart-Hart simplified for 10K NTC at 25°C B=3950 */
+    static const adc1_channel_t ntc_channels[NTC_COUNT] = {
+        PIN_NTC_1,
+        PIN_NTC_2,
+        PIN_NTC_3,
+        PIN_NTC_4,
+    };
+
     uint32_t sum = 0;
     for (int s = 0; s < 4; s++) {
-        sum += adc_read_mv(ADC1_CHANNEL_2 + sensor_idx);
+        sum += adc_read_mv(ntc_channels[sensor_idx]);
         vTaskDelay(pdMS_TO_TICKS(5));
     }
+
     float v_mv = sum / 4.0f;
-    /* 3300mV reference, 10K series resistor */
     float v = v_mv / 3300.0f;
-    if (v <= 0 || v >= 1) return 25.0f;
+    if (v <= 0.0f || v >= 1.0f) return 25.0f;
+
     float r_ntc = 10000.0f * v / (1.0f - v);
-    float temp_k = 1.0f / (1.0f/298.15f + logf(r_ntc/10000.0f)/3950.0f);
+    float temp_k = 1.0f / (1.0f / 298.15f + logf(r_ntc / 10000.0f) / 3950.0f);
     return temp_k - 273.15f;
 }
 

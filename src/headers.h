@@ -48,24 +48,8 @@ void third_wire_set_pwm_duty(uint32_t duty_pct);
 void pwm_set_duty(uint32_t duty_pct);
 void pwm_start(uint32_t duty_pct);
 void pwm_stop(void);
-uint32_t pot_read_duty_pct(void);  
-void     pwm_apply_pot(void);      
-
-/* rf_handshake.h */
-#pragma once
-#include "esp_err.h"
-#include <stdint.h>
-esp_err_t rf_handshake_wait(uint32_t timeout_ms);
-
-/* pre_bias.h */
-#pragma once
-#include "config.h"
-#include <stdint.h>
-uint32_t pre_bias_read_mv(void);
-void pre_bias_detect_and_select(void);
-output_profile_t pre_bias_get_profile(void);
-uint32_t pre_bias_get_nominal_mv(void);
-void pre_bias_task(void *arg);
+uint32_t pot_read_duty_pct(void);
+void     pwm_apply_pot(void);
 
 /* black_box.h */
 #pragma once

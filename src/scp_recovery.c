@@ -18,7 +18,6 @@
 #include "black_box.h"
 #include "mqtt_telemetry.h"
 #include "ina240.h"
-#include "pre_bias.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
@@ -214,11 +213,11 @@ void scp_recovery_task(void *arg)
         g_sys.scp_state = SCP_STATE_RETRY_PROBE;
         xSemaphoreGive(g_state_mutex);
 
-        uint32_t probe_mv = pre_bias_read_mv();
-        uint32_t nominal_mv = pre_bias_get_nominal_mv();
+        uint32_t probe_mv = g_sys.pack_voltage_mv;
+        uint32_t nominal_mv = (g_sys.pack_voltage_mv > 0U) ? g_sys.pack_voltage_mv : 72000U;
         uint32_t threshold_mv = (nominal_mv * SCP_PROBE_SHORTED_PCT) / 100;
 
-        ESP_LOGI(TAG, "Retry probe: load-side %d mV, threshold %d mV",
+        ESP_LOGI(TAG, "Retry probe: pack voltage %d mV, threshold %d mV",
                  probe_mv, threshold_mv);
 
         black_box_write_recovery_attempt(g_sys.retry_count, probe_mv);

@@ -230,6 +230,22 @@ void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)
 /* ----------------------------------------------------------------
  *  Upload buffer as JSON to MQTT on reconnect
  * ---------------------------------------------------------------- */
+static const char *bb_event_name(uint16_t event_type)
+{
+    switch (event_type) {
+    case 0x0001: return "CELL_MONITOR_FAIL";
+    case 0x0002: return "INA240_FAIL";
+    case 0x0020: return "SCP_TRIP";
+    case 0x0021: return "SCP_RECOVERY";
+    case 0x0022: return "SCP_PERMANENT";
+    case 0x0030: return "CELL_OV";
+    case 0x0031: return "CELL_UV";
+    case 0x0040: return "TEMP_WARN";
+    case 0x0041: return "TEMP_SHUTDOWN";
+    default:     return "UNKNOWN";
+    }
+}
+
 void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
 {
     if (!bb_partition || bb_hdr.count == 0) return;
@@ -238,11 +254,10 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
 
     uint32_t count = bb_hdr.count;
     uint32_t start = (bb_hdr.count < BB_MAX_RECORDS) ?
-                     0 : bb_hdr.write_idx;  // oldest first
+                     0 : bb_hdr.write_idx;
 
     ESP_LOGI(TAG, "Uploading %d records to MQTT...", count);
 
-    /* Rate-limit: 50 records/sec = 20ms/record */
     char json_buf[256];
     char topic[64];
     snprintf(topic, sizeof(topic), "hub/%s/blackbox", CONFIG_DEVICE_ID);
@@ -255,16 +270,15 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
         esp_partition_read(bb_partition, offset, &rec, sizeof(rec));
 
         snprintf(json_buf, sizeof(json_buf),
-            "{\"ts\":%u,\"ev\":\"0x%04X\",\"v_mv\":%u,"
-            "\"i_ma\":%d,\"ff\":%u,\"t_c\":%u}",
-            rec.timestamp, rec.event_type, rec.pack_voltage_mv,
-            rec.pack_current_ma, rec.fault_flags, rec.avg_temp_c);
+            "{\"timestamp\":%u,\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
+            "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\"}",
+            rec.timestamp, bb_event_name(rec.event_type), rec.pack_current_ma,
+            rec.pack_voltage_mv, rec.event_type);
 
         publish_fn(topic, json_buf);
-        vTaskDelay(pdMS_TO_TICKS(20));  // 50 records/sec
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
-    /* Clear buffer */
     esp_partition_erase_range(bb_partition, 0, bb_partition->size);
     bb_hdr.write_idx = 0;
     bb_hdr.count     = 0;
