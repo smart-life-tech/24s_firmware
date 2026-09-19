@@ -61,6 +61,7 @@ static uint16_t pec15_calc(const uint8_t *data, int len)
  *  SPI transaction (isoSPI wake-up + command + PEC)
  * ---------------------------------------------------------------- */
 #define CMD_ADCV   0x0360   // Start cell voltage ADC
+#define CMD_RDCFGA 0x0002   // Read config register A
 #define CMD_RDCVA  0x0004   // Read cell voltage register group A (cells 1-3)
 #define CMD_RDCVB  0x0006   // B (4-6)
 #define CMD_RDCVC  0x0008   // C (7-9)
@@ -70,17 +71,21 @@ static uint16_t pec15_calc(const uint8_t *data, int len)
 #define CMD_WRCFGA 0x0001   // Write config register A
 #define CMD_RDSTAT 0x0010   // Read status register A
 
-/* Wake isoSPI by sending dummy byte */
+/* Wake both devices in the daisy chain. The 2-device chain requires a more
+ * conservative wake than a single device; repeated dummy bytes ensure the
+ * downstream device has also exited standby before the next command.
+ */
 static void ltc_wake(void)
 {
     uint8_t dummy = 0xFF;
-    spi_transaction_t t = {
-        .tx_buffer = &dummy,
-        .length    = 8,
-    };
-    spi_device_transmit(g_spi_ltc, &t);
-    /* tWAKE = 300us minimum */
-    esp_rom_delay_us(400);
+    for (int i = 0; i < 3; i++) {
+        spi_transaction_t t = {
+            .tx_buffer = &dummy,
+            .length    = 8,
+        };
+        spi_device_transmit(g_spi_ltc, &t);
+        esp_rom_delay_us(300);
+    }
 }
 
 static esp_err_t ltc_send_command(uint16_t cmd)
@@ -135,6 +140,25 @@ static esp_err_t ltc_read_register(uint16_t cmd, uint8_t *data_ic1,
     return ESP_OK;
 }
 
+static uint8_t g_cfg_u19[6] = {0};
+static uint8_t g_cfg_u23[6] = {0};
+static bool g_cfg_loaded = false;
+
+static esp_err_t ltc6811_load_config_snapshot(void)
+{
+    uint8_t cfg_u19[6] = {0};
+    uint8_t cfg_u23[6] = {0};
+    esp_err_t ret = ltc_read_register(CMD_RDCFGA, cfg_u19, cfg_u23);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    memcpy(g_cfg_u19, cfg_u19, sizeof(g_cfg_u19));
+    memcpy(g_cfg_u23, cfg_u23, sizeof(g_cfg_u23));
+    g_cfg_loaded = true;
+    return ESP_OK;
+}
+
 /* ----------------------------------------------------------------
  *  Parse voltage register group (3 cells per group)
  *  LSB = 100µV → value in mV = raw × 0.1
@@ -160,10 +184,14 @@ esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out)
 {
     ltc_wake();
 
-    /* Start ADC conversion across the 2 x LTC6811-1 chain and allow the
-     * conversion time to elapse before reading register data. */
-    ltc_send_command(CMD_ADCV);
-    vTaskDelay(pdMS_TO_TICKS(5));
+    /* Start ADC conversion across the 2 x LTC6811-1 chain and allow enough
+     * time for the worst-case REFUP + conversion window in normal mode. */
+    esp_err_t ret = ltc_send_command(CMD_ADCV);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ADCV command failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    vTaskDelay(pdMS_TO_TICKS(7));
 
     uint16_t group_cmds[4] = {CMD_RDCVA, CMD_RDCVB, CMD_RDCVC, CMD_RDCVD};
     uint16_t cells[CELL_COUNT] = {0};
@@ -258,8 +286,6 @@ esp_err_t ltc6813_self_test(void)
  * ---------------------------------------------------------------- */
 static uint16_t g_balance_mask_u19 = 0U;
 static uint16_t g_balance_mask_u23 = 0U;
-static uint8_t g_cfg_u19[6] = {0};
-static uint8_t g_cfg_u23[6] = {0};
 
 static esp_err_t ltc6811_write_config(const uint8_t cfg_u19[6], const uint8_t cfg_u23[6])
 {
@@ -296,6 +322,13 @@ static esp_err_t ltc6811_write_config(const uint8_t cfg_u19[6], const uint8_t cf
 
 static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23)
 {
+    if (!g_cfg_loaded) {
+        esp_err_t ret = ltc6811_load_config_snapshot();
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+
     if (mask_u19 == g_balance_mask_u19 && mask_u23 == g_balance_mask_u23) {
         return ESP_OK;
     }
