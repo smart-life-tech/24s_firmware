@@ -52,7 +52,9 @@ static uint16_t pec15_calc(const uint8_t *data, int len)
         uint8_t index = (uint8_t)(((remainder >> 7) ^ data[i]) & 0xFF);
         remainder = (uint16_t)(((remainder << 8) ^ pec15_table[index]) & 0x7FFF);
     }
-    return remainder;
+    /* LTC6811 PEC15 result is returned with the low bit shifted to maintain the
+     * 15-bit CRC format used by the device; the LSB must be zero in the final PEC word. */
+    return (uint16_t)(remainder << 1);
 }
 
 /* ----------------------------------------------------------------
@@ -158,9 +160,10 @@ esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out)
 {
     ltc_wake();
 
-    /* Start ADC conversion across all cells in the 2 x LTC6811-1 chain. */
+    /* Start ADC conversion across the 2 x LTC6811-1 chain and allow the
+     * conversion time to elapse before reading register data. */
     ltc_send_command(CMD_ADCV);
-    vTaskDelay(pdMS_TO_TICKS(2));
+    vTaskDelay(pdMS_TO_TICKS(5));
 
     uint16_t group_cmds[4] = {CMD_RDCVA, CMD_RDCVB, CMD_RDCVC, CMD_RDCVD};
     uint16_t cells[CELL_COUNT] = {0};
