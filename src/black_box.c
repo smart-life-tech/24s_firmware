@@ -113,9 +113,11 @@ static esp_err_t hdr_read(void)
 
 static esp_err_t hdr_write(void)
 {
-    /* Use a rotating two-slot journal for the flash header so we never overwrite
-     * a previously programmed header cell with a bit pattern that would require
-     * a 1->0/0->1 transition inside the same NOR flash word. */
+    /* This is a simple rotating-header journal pattern, but it still relies on
+     * a sector erase before the next header slot is rewritten. That keeps the
+     * implementation simple for this firmware revision while avoiding the
+     * per-record erase behavior that would otherwise repeatedly rewrite the same
+     * header word. */
     bb_hdr.crc = header_crc(&bb_hdr);
 
     uint32_t next_slot = (bb_hdr_slot + 1U) % BB_HEADER_SLOT_COUNT;
@@ -286,8 +288,12 @@ void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
 void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)
 {
     uint16_t event_code = (temp_c >= TEMP_SHUTDOWN_C) ? 0x0041 : 0x0040;
-    bb_write_record(event_code, sensor_idx, (uint32_t)(temp_c * 10),
-                    0, NULL, (uint8_t)temp_c);
+    bb_write_record(event_code,
+                    g_sys.pack_current_ma,
+                    g_sys.pack_voltage_mv,
+                    0,
+                    NULL,
+                    (uint8_t)temp_c);
 }
 
 /* ----------------------------------------------------------------
