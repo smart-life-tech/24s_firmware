@@ -43,6 +43,8 @@ _Static_assert(sizeof(bb_record_t) == 64, "bb_record_t must be 64 bytes");
 #define BB_MAX_RECORDS       500
 #define BB_RECORD_SIZE       64
 #define BB_HEADER_SIZE       16   // magic(4) + write_idx(4) + count(4) + crc(4)
+#define BB_HEADER_SLOT_SIZE  32U
+#define BB_HEADER_SLOT_COUNT 2U
 #define BB_MAGIC             0xBB24BBBB
 #define BB_RECORD_DATA_OFFSET_DEFAULT 4096
 
@@ -55,6 +57,7 @@ typedef struct __attribute__((packed)) {
 
 static const esp_partition_t *bb_partition = NULL;
 static bb_header_t            bb_hdr;
+static uint32_t               bb_hdr_slot = 0U;
 static SemaphoreHandle_t      bb_mutex;
 
 /* ----------------------------------------------------------------
@@ -68,15 +71,66 @@ static uint32_t header_crc(const bb_header_t *h)
 /* ----------------------------------------------------------------
  *  Partition access helpers
  * ---------------------------------------------------------------- */
+static uint32_t header_slot_offset(uint32_t slot)
+{
+    return slot * BB_HEADER_SLOT_SIZE;
+}
+
 static esp_err_t hdr_read(void)
 {
-    return esp_partition_read(bb_partition, 0, &bb_hdr, sizeof(bb_hdr));
+    bb_header_t slot_a = {0};
+    bb_header_t slot_b = {0};
+
+    esp_err_t err_a = esp_partition_read(bb_partition, header_slot_offset(0), &slot_a, sizeof(slot_a));
+    esp_err_t err_b = esp_partition_read(bb_partition, header_slot_offset(1), &slot_b, sizeof(slot_b));
+
+    if (err_a != ESP_OK && err_b != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    bool valid_a = (slot_a.magic == BB_MAGIC && slot_a.crc == header_crc(&slot_a));
+    bool valid_b = (slot_b.magic == BB_MAGIC && slot_b.crc == header_crc(&slot_b));
+
+    if (!valid_a && !valid_b) {
+        bb_hdr.magic     = BB_MAGIC;
+        bb_hdr.write_idx = 0;
+        bb_hdr.count     = 0;
+        bb_hdr.crc       = header_crc(&bb_hdr);
+        bb_hdr_slot      = 0U;
+        return ESP_OK;
+    }
+
+    if (valid_a && valid_b) {
+        bb_hdr = (slot_a.write_idx >= slot_b.write_idx) ? slot_a : slot_b;
+        bb_hdr_slot = (slot_a.write_idx >= slot_b.write_idx) ? 0U : 1U;
+        return ESP_OK;
+    }
+
+    bb_hdr = valid_a ? slot_a : slot_b;
+    bb_hdr_slot = valid_a ? 0U : 1U;
+    return ESP_OK;
 }
 
 static esp_err_t hdr_write(void)
 {
+    /* Use a rotating two-slot journal for the flash header so we never overwrite
+     * a previously programmed header cell with a bit pattern that would require
+     * a 1->0/0->1 transition inside the same NOR flash word. */
     bb_hdr.crc = header_crc(&bb_hdr);
-    return esp_partition_write(bb_partition, 0, &bb_hdr, sizeof(bb_hdr));
+
+    uint32_t next_slot = (bb_hdr_slot + 1U) % BB_HEADER_SLOT_COUNT;
+    uint32_t slot_offset = header_slot_offset(next_slot);
+
+    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
+    if (erase_size > 0U) {
+        esp_partition_erase_range(bb_partition, 0, erase_size);
+    }
+
+    esp_err_t err = esp_partition_write(bb_partition, slot_offset, &bb_hdr, sizeof(bb_hdr));
+    if (err == ESP_OK) {
+        bb_hdr_slot = next_slot;
+    }
+    return err;
 }
 
 static uint32_t record_offset(uint32_t idx)
@@ -110,6 +164,7 @@ void black_box_init(void)
         bb_hdr.magic     = BB_MAGIC;
         bb_hdr.write_idx = 0;
         bb_hdr.count     = 0;
+        bb_hdr_slot      = 0U;
         hdr_write();
     }
 
@@ -211,11 +266,12 @@ void black_box_write_fault(fault_type_t fault, int32_t peak_current,
 
 void black_box_write_recovery_attempt(uint32_t retry_count, uint32_t probe_mv)
 {
-    /* Store retry count in the fault_flags field and the measured probe value
-     * in the current field so the record reflects both the retry state and the
-     * actual short-circuit probe result. */
-    bb_write_record(0x0021, (int32_t)probe_mv, retry_count,
-                    (uint8_t)(retry_count & 0xFFU), NULL, (uint8_t)g_sys.temp_avg_c);
+    /* Keep retry_count in the raw fault_flags byte; write the actual pack voltage
+     * to pack_voltage_mv so the MQTT black-box payload will not report the retry
+     * count as a voltage. */
+    bb_write_record(0x0021, (int32_t)probe_mv, g_sys.pack_voltage_mv,
+                    (uint8_t)(retry_count & 0xFFU), NULL,
+                    (uint8_t)g_sys.temp_avg_c);
 }
 
 void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
