@@ -113,25 +113,20 @@ static esp_err_t hdr_read(void)
 
 static esp_err_t hdr_write(void)
 {
-    /* This is a simple rotating-header journal pattern, but it still relies on
-     * a sector erase before the next header slot is rewritten. That keeps the
-     * implementation simple for this firmware revision while avoiding the
-     * per-record erase behavior that would otherwise repeatedly rewrite the same
-     * header word. */
+    /* Keep the header update out of the hot record path. The header is only
+     * updated as a lightweight metadata checkpoint and is not erased on every
+     * record write. This is still a simplified implementation rather than a
+     * full flash-journal design, but it avoids the per-record sector erase that
+     * would otherwise wear the partition prematurely. */
     bb_hdr.crc = header_crc(&bb_hdr);
 
-    uint32_t next_slot = (bb_hdr_slot + 1U) % BB_HEADER_SLOT_COUNT;
-    uint32_t slot_offset = header_slot_offset(next_slot);
-
-    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
-    if (erase_size > 0U) {
-        esp_partition_erase_range(bb_partition, 0, erase_size);
-    }
-
+    uint32_t slot_offset = header_slot_offset(bb_hdr_slot);
     esp_err_t err = esp_partition_write(bb_partition, slot_offset, &bb_hdr, sizeof(bb_hdr));
+
     if (err == ESP_OK) {
-        bb_hdr_slot = next_slot;
+        bb_hdr_slot = (bb_hdr_slot + 1U) % BB_HEADER_SLOT_COUNT;
     }
+
     return err;
 }
 
@@ -184,19 +179,6 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
     if (!bb_partition) return;
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
-
-    if (bb_hdr.count >= BB_MAX_RECORDS) {
-        uint32_t erase_start = 0U;
-        uint32_t erase_size = 0U;
-        uint32_t erase_size_raw = esp_partition_get_erase_size(bb_partition, 0);
-        if (erase_size_raw > 0U) {
-            erase_start = erase_size_raw;
-            erase_size = bb_partition->size - erase_start;
-            esp_partition_erase_range(bb_partition, erase_start, erase_size);
-        }
-        bb_hdr.write_idx = 0;
-        bb_hdr.count = 0;
-    }
 
     bb_record_t rec = {0};
     rec.timestamp       = (uint32_t)(time(NULL));

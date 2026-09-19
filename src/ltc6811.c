@@ -60,14 +60,12 @@ static uint16_t pec15_calc(const uint8_t *data, int len)
 /* ----------------------------------------------------------------
  *  SPI transaction (isoSPI wake-up + command + PEC)
  * ---------------------------------------------------------------- */
-#define CMD_ADCV   0x0360   // Start cell voltage ADC
+#define CMD_ADCV   0x0260   // Start cell voltage ADC (LTC6811 command)
 #define CMD_RDCFGA 0x0002   // Read config register A
 #define CMD_RDCVA  0x0004   // Read cell voltage register group A (cells 1-3)
 #define CMD_RDCVB  0x0006   // B (4-6)
 #define CMD_RDCVC  0x0008   // C (7-9)
 #define CMD_RDCVD  0x000A   // D (10-12)
-#define CMD_RDCVE  0x0009   // E (13-15)
-#define CMD_RDCVF  0x000B   // F (16-18)
 #define CMD_WRCFGA 0x0001   // Write config register A
 #define CMD_RDSTAT 0x0010   // Read status register A
 
