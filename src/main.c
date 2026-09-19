@@ -71,7 +71,7 @@ static esp_err_t run_boot_sequence(void)
     ESP_LOGI(TAG, "      Black Box OK");
 
     ESP_LOGI(TAG, "[4/5] LTC6811-1 self-test...");
-    if (ltc6813_self_test() != ESP_OK) {
+    if (ltc6811_self_test() != ESP_OK) {
         ESP_LOGE(TAG, "LTC6811-1 self-test FAILED — safe standby");
         black_box_write_fault(FAULT_CELL_MONITOR_FAIL, 0, 0);
         led_blink_fault();

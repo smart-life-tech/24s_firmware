@@ -244,6 +244,7 @@ esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out)
     return ESP_OK;
 }
 
+/* Deprecated compatibility wrapper retained for legacy callers. */
 esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
 {
     return ltc6811_read_all_cells(cell_mv_out);
@@ -270,6 +271,7 @@ esp_err_t ltc6811_self_test(void)
     return ESP_OK;
 }
 
+/* Deprecated compatibility wrapper retained for legacy callers. */
 esp_err_t ltc6813_self_test(void)
 {
     return ltc6811_self_test();
@@ -286,6 +288,7 @@ esp_err_t ltc6813_self_test(void)
  * ---------------------------------------------------------------- */
 static uint16_t g_balance_mask_u19 = 0U;
 static uint16_t g_balance_mask_u23 = 0U;
+static TickType_t g_last_balance_refresh_tick = 0;
 
 static esp_err_t ltc6811_write_config(const uint8_t cfg_u19[6], const uint8_t cfg_u23[6])
 {
@@ -320,7 +323,7 @@ static esp_err_t ltc6811_write_config(const uint8_t cfg_u19[6], const uint8_t cf
     return spi_device_transmit(g_spi_ltc, &t);
 }
 
-static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23)
+static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23, bool force_write)
 {
     if (!g_cfg_loaded) {
         esp_err_t ret = ltc6811_load_config_snapshot();
@@ -329,7 +332,7 @@ static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23)
         }
     }
 
-    if (mask_u19 == g_balance_mask_u19 && mask_u23 == g_balance_mask_u23) {
+    if (!force_write && mask_u19 == g_balance_mask_u19 && mask_u23 == g_balance_mask_u23) {
         return ESP_OK;
     }
 
@@ -355,6 +358,7 @@ static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23)
         memcpy(g_cfg_u23, cfg_u23, sizeof(g_cfg_u23));
         g_balance_mask_u19 = mask_u19;
         g_balance_mask_u23 = mask_u23;
+        g_last_balance_refresh_tick = xTaskGetTickCount();
     }
     return ret;
 }
@@ -401,7 +405,8 @@ static void balancing_update(const uint16_t *cells)
         xSemaphoreGive(g_state_mutex);
     }
 
-    esp_err_t ret = ltc6811_set_balance_masks(mask_u19, mask_u23);
+    bool force_refresh = (xTaskGetTickCount() - g_last_balance_refresh_tick) >= pdMS_TO_TICKS(1000);
+    esp_err_t ret = ltc6811_set_balance_masks(mask_u19, mask_u23, force_refresh);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Balance config write failed: %s", esp_err_to_name(ret));
     }
@@ -486,7 +491,7 @@ void cell_monitor_task(void *arg)
 
         /* Voltage scan */
         uint16_t cells[CELL_COUNT];
-        if (ltc6813_read_all_cells(cells) == ESP_OK) {
+        if (ltc6811_read_all_cells(cells) == ESP_OK) {
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             memcpy(g_sys.cell_mv, cells, sizeof(cells));
 
