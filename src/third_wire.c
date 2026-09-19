@@ -40,19 +40,8 @@ static void save_mode_to_nvs(op_mode_t mode, uint32_t duty)
 
 static void load_mode_from_nvs(op_mode_t *mode, uint32_t *duty)
 {
-    nvs_handle_t h;
-    *mode = MODE_OFF;
-    *duty = 0;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
-        uint8_t m = (uint8_t)MODE_OFF;
-        uint32_t d = 0U;
-        nvs_get_u8(h, NVS_KEY_MODE, &m);
-        nvs_get_u32(h, NVS_KEY_DUTY, &d);
-        *mode = (op_mode_t)m;
-        *duty = d;
-        nvs_close(h);
-    }
-    /* Safe default is OFF on boot; a new command is required to energize the output. */
+    (void)mode;
+    (void)duty;
     *mode = MODE_OFF;
     *duty = 0U;
     ESP_LOGI(TAG, "Boot default restored to OFF: duty %d%%", *duty);
@@ -148,20 +137,19 @@ void third_wire_set_mode_from_mqtt(const char *action)
     }
 
     apply_mode(mode, duty);
-    mqtt_publish_gate_state_change(mode);
+
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    op_mode_t published_mode = g_sys.op_mode;
+    xSemaphoreGive(g_state_mutex);
+    mqtt_publish_gate_state_change(published_mode);
 }
 
 void third_wire_set_pwm_duty(uint32_t duty_pct)
 {
     if (duty_pct > 100) duty_pct = 100;
 
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     op_mode_t mode = (duty_pct == 0U) ? MODE_OFF :
                      (duty_pct >= 100U) ? MODE_FULL_POWER : MODE_PWM_50;
-    g_sys.pwm_duty_pct = duty_pct;
-    g_sys.op_mode = mode;
-    g_sys.pwm_remote_override = true;
-    xSemaphoreGive(g_state_mutex);
 
     if (mode == MODE_OFF) {
         apply_mode(MODE_OFF, 0U);
@@ -171,6 +159,10 @@ void third_wire_set_pwm_duty(uint32_t duty_pct)
         pwm_set_duty(duty_pct);
         apply_mode(MODE_PWM_50, duty_pct);
     }
+
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    g_sys.pwm_remote_override = true;
+    xSemaphoreGive(g_state_mutex);
 
     save_mode_to_nvs(mode, duty_pct);
     ESP_LOGI(TAG, "PWM duty updated to %d%% (mode %d)", duty_pct, mode);

@@ -101,15 +101,15 @@ static esp_err_t ltc_send_command(uint16_t cmd)
 static esp_err_t ltc_read_register(uint16_t cmd, uint8_t *data_ic1,
                                     uint8_t *data_ic2)
 {
-    uint8_t tx[24] = {0};
-    uint8_t rx[24] = {0};
+    uint8_t tx[20] = {0};
+    uint8_t rx[20] = {0};
     tx[0] = (cmd >> 8) & 0xFF;
     tx[1] = cmd & 0xFF;
     uint16_t pec = pec15_calc(tx, 2);
     tx[2] = (pec >> 8) & 0xFF;
     tx[3] = pec & 0xFF;
 
-    /* Send the 4-byte command and read back 20 bytes of register data. */
+    /* 4-byte command + 8 bytes IC2 + 8 bytes IC1 = 20 bytes */
     spi_transaction_t t = {
         .tx_buffer = tx,
         .rx_buffer = rx,
@@ -118,14 +118,17 @@ static esp_err_t ltc_read_register(uint16_t cmd, uint8_t *data_ic1,
     esp_err_t ret = spi_device_transmit(g_spi_ltc, &t);
     if (ret != ESP_OK) return ret;
 
-    /* Daisy-chain: IC2 data first, IC1 data last */
-    memcpy(data_ic2, rx + 4, 6);
-    memcpy(data_ic1, rx + 12, 6);
+    uint8_t raw_ic2[8] = {0};
+    uint8_t raw_ic1[8] = {0};
+    memcpy(raw_ic2, rx + 4, 8);
+    memcpy(raw_ic1, rx + 12, 8);
+    memcpy(data_ic2, raw_ic2, 6);
+    memcpy(data_ic1, raw_ic1, 6);
 
-    uint16_t pec_rx2 = (rx[10] << 8) | rx[11];
-    uint16_t pec_rx1 = (rx[18] << 8) | rx[19];
-    if (pec15_calc(data_ic2, 6) != pec_rx2) return ESP_ERR_INVALID_CRC;
-    if (pec15_calc(data_ic1, 6) != pec_rx1) return ESP_ERR_INVALID_CRC;
+    uint16_t pec_rx2 = (raw_ic2[6] << 8) | raw_ic2[7];
+    uint16_t pec_rx1 = (raw_ic1[6] << 8) | raw_ic1[7];
+    if (pec15_calc(raw_ic2, 6) != pec_rx2) return ESP_ERR_INVALID_CRC;
+    if (pec15_calc(raw_ic1, 6) != pec_rx1) return ESP_ERR_INVALID_CRC;
 
     return ESP_OK;
 }
@@ -240,32 +243,35 @@ esp_err_t ltc6813_self_test(void)
 
 static void balancing_update(const uint16_t *cells)
 {
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    for (int i = 0; i < CELL_COUNT; i++) {
+        g_sys.cell_balancing[i] = false;
+    }
+    xSemaphoreGive(g_state_mutex);
+
     if (cells == NULL) {
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        for (int i = 0; i < CELL_COUNT; i++) {
-            g_sys.cell_balancing[i] = false;
-        }
-        xSemaphoreGive(g_state_mutex);
+        ESP_LOGW(TAG, "Balancing disabled: no valid cell set available");
         return;
     }
 
+    /*
+     * The PCB balancing netlist is not yet confirmed in firmware-controlled hardware.
+     * The safe behavior is to keep all LTC balancing channels off until the board-level
+     * enable mapping is validated, but continue exposing the delta-based decision state.
+     */
     uint32_t total_mv = 0U;
     for (int i = 0; i < CELL_COUNT; i++) {
         total_mv += cells[i];
     }
     uint32_t avg_mv = total_mv / CELL_COUNT;
 
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    uint32_t active = 0U;
     for (int i = 0; i < CELL_COUNT; i++) {
-        g_sys.cell_balancing[i] = (cells[i] > (avg_mv + BAL_DELTA_MV));
+        bool should_balance = (cells[i] > (avg_mv + BAL_DELTA_MV));
+        if (should_balance) active++;
+        (void)should_balance;
     }
-    xSemaphoreGive(g_state_mutex);
-
-    uint32_t active = 0;
-    for (int i = 0; i < CELL_COUNT; i++) {
-        if (g_sys.cell_balancing[i]) active++;
-    }
-    ESP_LOGI(TAG, "Passive balancing target: %lu cells above average by %d mV",
+    ESP_LOGW(TAG, "Balancing remains disabled until PCB balancing netlist is confirmed; %lu cells were above avg by %d mV",
              (unsigned long)active, BAL_DELTA_MV);
 }
 
@@ -307,17 +313,24 @@ static void check_thresholds(const uint16_t *cells)
     xSemaphoreGive(g_state_mutex);
 
     uint32_t pack_total_mv = 0;
+    bool cell_fault = false;
     for (int i = 0; i < CELL_COUNT; i++) {
         pack_total_mv += cells[i];
         if (cells[i] >= ov) {
+            cell_fault = true;
             ESP_LOGW(TAG, "Cell %d OV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_OV, i, cells[i]);
             mqtt_publish_fault("CELL_OV", 0);
         } else if (cells[i] <= uv) {
+            cell_fault = true;
             ESP_LOGW(TAG, "Cell %d UV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_UV, i, cells[i]);
             mqtt_publish_fault("CELL_UV", 0);
         }
+    }
+
+    if (cell_fault) {
+        gate_hold_off();
     }
 
     if (pack_total_mv >= PACK_CUTOFF_MV) {
