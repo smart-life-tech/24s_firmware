@@ -52,6 +52,7 @@ static esp_err_t run_boot_sequence(void)
 
     ESP_LOGI(TAG, "[1/5] Peripheral init...");
     ESP_ERROR_CHECK(hardware_init());
+    gate_hold_off();
     ESP_LOGI(TAG, "      GPIO / LEDC / SPI / ADC OK");
 
     ESP_LOGI(TAG, "[2/5] Loading NVS...");
@@ -97,7 +98,6 @@ static esp_err_t run_boot_sequence(void)
 void app_main(void)
 {
     g_state_mutex = xSemaphoreCreateMutex();
-    gate_hold_off();
 
     if (run_boot_sequence() != ESP_OK) {
         xTaskCreate(cell_monitor_task,  "cell_mon",  4096, NULL, 5, NULL);

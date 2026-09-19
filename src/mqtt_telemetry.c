@@ -177,6 +177,13 @@ static void publish_telemetry(void)
     system_state_t snap = g_sys;
     xSemaphoreGive(g_state_mutex);
 
+    uint32_t soc_10 = 0U;
+    if (PACK_CUTOFF_MV > 0U) {
+        soc_10 = (snap.pack_voltage_mv * 1000U) / PACK_CUTOFF_MV;
+        if (soc_10 > 1000U) soc_10 = 1000U;
+        snap.soc_percent_x10 = soc_10;
+    }
+
     const char *gate_str =
         snap.gate_state == GATE_FULL_POWER ? "FULL_POWER" :
         snap.gate_state == GATE_PWM        ? "PWM_50"     : "OFF";
@@ -201,7 +208,7 @@ static void publish_telemetry(void)
         (uint32_t)time(NULL),
         snap.pack_voltage_mv,
         snap.pack_current_ma,
-        snap.soc_percent_x10 / 10.0f,
+        soc_10 / 10.0f,
         snap.temp_avg_c,
         snap.temp_sensors_c[0], snap.temp_sensors_c[1], snap.temp_sensors_c[2], snap.temp_sensors_c[3],
         gate_str,

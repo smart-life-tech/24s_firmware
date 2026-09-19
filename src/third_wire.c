@@ -50,10 +50,17 @@ static void load_mode_from_nvs(op_mode_t *mode, uint32_t *duty)
     ESP_LOGI(TAG, "Boot default restored to OFF: duty %d%%", *duty);
 }
 
+static bool output_inhibited(void)
+{
+    return g_sys.permanent_fault || g_sys.fault_active;
+}
+
 static void apply_mode(op_mode_t mode, uint32_t duty_pct)
 {
-    if (g_sys.permanent_fault) {
-        ESP_LOGW(TAG, "Permanent fault active — mode change blocked");
+    if (output_inhibited()) {
+        ESP_LOGW(TAG, "Output inhibited by fault state — mode change blocked");
+        ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
+        gpio_set_level(PIN_GATE_CTRL, 0);
         return;
     }
 
@@ -106,7 +113,7 @@ void third_wire_task(void *arg)
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        if (!g_sys.boot_complete || g_sys.permanent_fault) {
+        if (!g_sys.boot_complete || output_inhibited()) {
             continue;
         }
         if (g_sys.op_mode == MODE_PWM_50 && !g_sys.pwm_remote_override) {

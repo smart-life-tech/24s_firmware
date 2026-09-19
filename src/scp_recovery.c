@@ -154,6 +154,14 @@ void scp_recovery_task(void *arg)
         g_sys.fault_active = true;
         xSemaphoreGive(g_state_mutex);
 
+        if (g_sys.oc_ma > 0U && g_sys.pack_current_ma > (int32_t)g_sys.oc_ma) {
+            gate_disable();
+            black_box_write_fault(FAULT_SCP_TRIP, g_sys.pack_current_ma, g_sys.pack_voltage_mv);
+            mqtt_publish_fault("OC_LIMIT", g_sys.pack_current_ma);
+            ESP_LOGE(TAG, "OC threshold exceeded: %ld mA > %u mA", (long)g_sys.pack_current_ma, g_sys.oc_ma);
+            continue;
+        }
+
         /* ---- FAULT LATCH: capture peak current, log to Black Box ---- */
         vTaskDelay(pdMS_TO_TICKS(10));  // allow INA240 to settle
         int32_t peak_current = ina240_read_current_ma();

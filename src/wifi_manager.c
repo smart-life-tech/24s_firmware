@@ -25,6 +25,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         switch (event_id) {
         case WIFI_EVENT_STA_START:
             ESP_LOGI(TAG, "Wi-Fi station starting");
+            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+            g_sys.wifi_connected = false;
+            xSemaphoreGive(g_state_mutex);
             esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
@@ -80,8 +83,16 @@ void wifi_manager_task(void *arg)
 {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (g_sys.wifi_connected) {
+        if (!g_sys.wifi_connected) {
             esp_wifi_connect();
+            continue;
+        }
+
+        wifi_ap_record_t ap_info;
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+            g_sys.wifi_rssi = (int8_t)ap_info.rssi;
+            xSemaphoreGive(g_state_mutex);
         }
     }
 }

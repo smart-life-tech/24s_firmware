@@ -76,10 +76,6 @@ static esp_err_t hdr_read(void)
 static esp_err_t hdr_write(void)
 {
     bb_hdr.crc = header_crc(&bb_hdr);
-    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
-    if (erase_size > 0U) {
-        esp_partition_erase_range(bb_partition, 0, erase_size);
-    }
     return esp_partition_write(bb_partition, 0, &bb_hdr, sizeof(bb_hdr));
 }
 
@@ -215,9 +211,11 @@ void black_box_write_fault(fault_type_t fault, int32_t peak_current,
 
 void black_box_write_recovery_attempt(uint32_t retry_count, uint32_t probe_mv)
 {
-    /* Store retry count in current_ma field, probe_mv in voltage_mv */
-    bb_write_record(0x0021, (int32_t)retry_count, probe_mv,
-                    0, NULL, (uint8_t)g_sys.temp_avg_c);
+    /* Store retry count in the fault_flags field and the measured probe value
+     * in the current field so the record reflects both the retry state and the
+     * actual short-circuit probe result. */
+    bb_write_record(0x0021, (int32_t)probe_mv, retry_count,
+                    (uint8_t)(retry_count & 0xFFU), NULL, (uint8_t)g_sys.temp_avg_c);
 }
 
 void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
@@ -292,6 +290,7 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
     }
 
     esp_partition_erase_range(bb_partition, 0, bb_partition->size);
+    bb_hdr.magic     = BB_MAGIC;
     bb_hdr.write_idx = 0;
     bb_hdr.count     = 0;
     hdr_write();
