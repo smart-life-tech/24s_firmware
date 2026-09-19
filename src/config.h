@@ -7,6 +7,9 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "driver/gpio.h"
+#include "driver/adc.h"
+#include "freertos/FreeRTOS.h"
 
 /* ================================================================
  *  GPIO pin map (ESP32-S2)
@@ -14,7 +17,7 @@
 
 #define PIN_GATE_CTRL       GPIO_NUM_4
 #define PIN_FAULT_N         GPIO_NUM_6
-#define PIN_STATUS_LED      GPIO_NUM_7
+#define PIN_STATUS_LED      GPIO_NUM_NC /* GPIO7 is dedicated to NTC2 on the final PCB; no software LED is placed on this pin */
 #define PIN_LTC_CS          GPIO_NUM_13
 
 #define PIN_SPI_MOSI        GPIO_NUM_39

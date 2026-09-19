@@ -1,15 +1,9 @@
 /**
- * ltc6813.c — LTC6813-1 isoSPI Cell Monitor Driver
+ * ltc6813.c — LTC6811-1 isoSPI Cell Monitor Driver
  *
- * Two ICs in daisy-chain via SM91502ALA isolation transformers.
- * Each IC monitors up to 18 cells → 24 total across both.
- * FSPI @ 1MHz, SPI mode 3, PEC (15-bit CRC) on every transaction.
- *
- * Monitoring schedule (Section 7.1):
- *  - Cell voltage scan: every 250ms
- *  - NTC thermistor:    every 500ms (GPIO-muxed via J3-J6)
- *  - Balancing check:   each scan, >30mV above average
- *  - MQTT cell report:  every 30s (handled by mqtt_telemetry.c)
+ * Final PCB hardware: two LTC6811-1 devices in daisy-chain,
+ * 12 cells per device, 24 cells total. This driver reads the actual
+ * 2 x 12-cell chain rather than the stale 18-cell assumption.
  */
 
 #include "ltc6813.h"
@@ -151,51 +145,43 @@ esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out)
 {
     ltc_wake();
 
-    /* Start ADC conversion — MD=01 (fast), DCP=0, CH=0 (all cells) */
+    /* Start ADC conversion across all cells in the 2 x LTC6811-1 chain. */
     ltc_send_command(CMD_ADCV);
-    /* Wait for conversion: ~1.1ms in fast mode */
     vTaskDelay(pdMS_TO_TICKS(2));
 
-    uint8_t ic1[6], ic2[6];
-    uint16_t c[24];
-    uint8_t cmd_groups[] = {
-        CMD_RDCVA >> 8, CMD_RDCVA & 0xFF,
-        CMD_RDCVB >> 8, CMD_RDCVB & 0xFF,
-        CMD_RDCVC >> 8, CMD_RDCVC & 0xFF,
-        CMD_RDCVD >> 8, CMD_RDCVD & 0xFF,
-    };
-    uint16_t cmds[4] = {CMD_RDCVA, CMD_RDCVB, CMD_RDCVC, CMD_RDCVD};
-    int cell_idx = 0;
+    uint16_t group_cmds[4] = {CMD_RDCVA, CMD_RDCVB, CMD_RDCVC, CMD_RDCVD};
+    uint16_t cells[CELL_COUNT] = {0};
+    int out_idx = 0;
 
     for (int g = 0; g < 4; g++) {
-        esp_err_t r = ltc_read_register(cmds[g], ic1, ic2);
+        uint8_t ic1[6] = {0};
+        uint8_t ic2[6] = {0};
+
+        esp_err_t r = ltc_read_register(group_cmds[g], ic1, ic2);
         if (r != ESP_OK) {
-            ESP_LOGW(TAG, "PEC fail on group %d", g);
-            /* Mark invalid — don't update cell values */
-            return ESP_ERR_INVALID_CRC;
+            ESP_LOGW(TAG, "Cell group %d read failed (CRC/error)", g);
+            return r;
         }
-        /* IC1: cells 1-12 (first 4 groups × 3 cells) */
-        uint16_t a, b, cv;
-        parse_voltage_group(ic1, &a, &b, &cv);
-        c[cell_idx++] = a;
-        c[cell_idx++] = b;
-        c[cell_idx++] = cv;
+
+        uint16_t d1_a, d1_b, d1_c;
+        uint16_t d2_a, d2_b, d2_c;
+        parse_voltage_group(ic1, &d1_a, &d1_b, &d1_c);
+        parse_voltage_group(ic2, &d2_a, &d2_b, &d2_c);
+
+        cells[out_idx++] = d1_a;
+        cells[out_idx++] = d1_b;
+        cells[out_idx++] = d1_c;
+        cells[out_idx++] = d2_a;
+        cells[out_idx++] = d2_b;
+        cells[out_idx++] = d2_c;
     }
 
-    /* IC2: cells 13-24 */
-    cell_idx = 12;
-    for (int g = 0; g < 4; g++) {
-        uint16_t a, b, cv;
-        parse_voltage_group(ic2, &a, &b, &cv);
-        c[cell_idx++] = a;
-        c[cell_idx++] = b;
-        c[cell_idx++] = cv;
-        /* Note: IC2 only has 12 active cells (cells 13-24) */
-        /* Remaining 6 channels are unused in this 24S config */
-        if (cell_idx >= 24) break;
+    if (out_idx != CELL_COUNT) {
+        ESP_LOGE(TAG, "Expected %d cell values, got %d", CELL_COUNT, out_idx);
+        return ESP_ERR_INVALID_SIZE;
     }
 
-    memcpy(cell_mv_out, c, CELL_COUNT * sizeof(uint16_t));
+    memcpy(cell_mv_out, cells, CELL_COUNT * sizeof(uint16_t));
     return ESP_OK;
 }
 

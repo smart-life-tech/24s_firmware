@@ -104,6 +104,11 @@ static bool check_permanent_fault(void)
  * ---------------------------------------------------------------- */
 static void led_blink_task_red(void *arg)
 {
+    if (PIN_STATUS_LED < 0) {
+        vTaskDelete(NULL);
+        return;
+    }
+
     /* 5Hz red blink during recovery wait */
     while (1) {
         gpio_set_level(PIN_STATUS_LED, 1);
@@ -175,10 +180,14 @@ void scp_recovery_task(void *arg)
             mqtt_publish_fault("PERMANENT_FAULT", peak_current);
             /* Blink LED — wait for reset or MQTT clear */
             while (g_sys.permanent_fault) {
-                gpio_set_level(PIN_STATUS_LED, 1);
-                vTaskDelay(pdMS_TO_TICKS(200));
-                gpio_set_level(PIN_STATUS_LED, 0);
-                vTaskDelay(pdMS_TO_TICKS(200));
+                if (PIN_STATUS_LED >= 0) {
+                    gpio_set_level(PIN_STATUS_LED, 1);
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    gpio_set_level(PIN_STATUS_LED, 0);
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                }
             }
             /* MQTT reset_fault command cleared permanent_fault */
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
@@ -205,7 +214,9 @@ void scp_recovery_task(void *arg)
         if (led_task_handle) {
             vTaskDelete(led_task_handle);
             led_task_handle = NULL;
-            gpio_set_level(PIN_STATUS_LED, 0);
+            if (PIN_STATUS_LED >= 0) {
+                gpio_set_level(PIN_STATUS_LED, 0);
+            }
         }
 
         /* ---- RETRY PROBE: check load-side voltage ---- */
@@ -271,7 +282,9 @@ void scp_recovery_task(void *arg)
             g_sys.scp_state    = SCP_STATE_NORMAL;
             g_sys.fault_active = false;
             xSemaphoreGive(g_state_mutex);
-            gpio_set_level(PIN_STATUS_LED, 1);  // solid on = OK
+            if (PIN_STATUS_LED >= 0) {
+                gpio_set_level(PIN_STATUS_LED, 1);  // solid on = OK
+            }
             ESP_LOGI(TAG, "Gate restored — NORMAL");
             mqtt_publish_fault("RECOVERED", 0);
         }

@@ -129,6 +129,8 @@ void third_wire_set_mode_from_mqtt(const char *action)
 
     if (strcmp(action, "ON") == 0) {
         mode = MODE_FULL_POWER;
+    } else if (strcmp(action, "OFF") == 0) {
+        mode = MODE_OFF;
     } else if (strcmp(action, "PWM") == 0) {
         mode = MODE_PWM_50;
     }

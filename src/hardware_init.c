@@ -13,7 +13,7 @@
 
 static const char *TAG = "HW_INIT";
 
-static esp_adc_cal_characteristics_t adc_chars;
+esp_adc_cal_characteristics_t g_adc_chars;
 spi_device_handle_t g_spi_ltc;
 
 static void init_gpio(void)
@@ -37,14 +37,17 @@ static void init_gpio(void)
     };
     gpio_config(&fault_cfg);
 
-    gpio_config_t led_cfg = {
-        .pin_bit_mask = (1ULL << PIN_STATUS_LED),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&led_cfg);
+    if (PIN_STATUS_LED >= 0) {
+        gpio_config_t led_cfg = {
+            .pin_bit_mask = (1ULL << PIN_STATUS_LED),
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&led_cfg);
+        gpio_set_level(PIN_STATUS_LED, 0);
+    }
 
     gpio_install_isr_service(0);
 }
@@ -105,7 +108,7 @@ static void init_adc(void)
     adc1_config_channel_atten(PIN_INA240_ADC, ADC_ATTEN_DB_11);
 
     esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11,
-                             ADC_WIDTH_BIT_12, 1100, &adc_chars);
+                             ADC_WIDTH_BIT_12, 1100, &g_adc_chars);
     ESP_LOGI(TAG, "ADC initialized");
 }
 
@@ -119,6 +122,30 @@ esp_err_t hardware_init(void)
     return ESP_OK;
 }
 
+void led_blink_fault(void)
+{
+    if (PIN_STATUS_LED < 0) {
+        return;
+    }
+    for (int i = 0; i < 4; i++) {
+        gpio_set_level(PIN_STATUS_LED, 1);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_set_level(PIN_STATUS_LED, 0);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void led_blink_amber_1hz(void)
+{
+    if (PIN_STATUS_LED < 0) {
+        return;
+    }
+    gpio_set_level(PIN_STATUS_LED, 1);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    gpio_set_level(PIN_STATUS_LED, 0);
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
+
 void gate_hold_off(void)
 {
     ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
@@ -130,5 +157,5 @@ uint32_t adc_read_mv(adc1_channel_t channel)
     uint32_t raw = 0;
     for (int i = 0; i < 10; i++) raw += adc1_get_raw(channel);
     raw /= 10;
-    return esp_adc_cal_raw_to_voltage(raw, &adc_chars);
+    return esp_adc_cal_raw_to_voltage(raw, &g_adc_chars);
 }

@@ -1,8 +1,8 @@
 /**
- * pwm_mode.c ” LEDC PWM helpers
+ * pwm_mode.c ï¿½ LEDC PWM helpers
  *
  * The INA240A1D has built-in enhanced PWM rejection rated to 100kHz.
- * Our 20kHz target is well within spec ” no external blanking needed.
+ * Our 20kHz target is well within spec ï¿½ no external blanking needed.
  * TLV3501 OCP threshold remains valid during PWM switching.
  */
 
@@ -19,7 +19,7 @@
 
 static const char *TAG = "PWM";
 
-extern esp_adc_cal_characteristics_t adc_chars;
+extern esp_adc_cal_characteristics_t g_adc_chars;
 
 /**
  * Set duty cycle 0-100%.
@@ -108,7 +108,7 @@ void pwm_apply_pot(void)
         g_sys.pwm_duty_pct = duty;
         xSemaphoreGive(g_state_mutex);
     } else {
-        ESP_LOGW(TAG, "pwm_apply_pot: state mutex timeout ” "
+        ESP_LOGW(TAG, "pwm_apply_pot: state mutex timeout ï¿½ "
                       "duty=%u%% applied, g_sys.pwm_duty_pct not updated this cycle",
                  (unsigned)duty);
     }
