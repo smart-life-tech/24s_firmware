@@ -258,6 +258,8 @@ esp_err_t ltc6813_self_test(void)
  * ---------------------------------------------------------------- */
 static uint16_t g_balance_mask_u19 = 0U;
 static uint16_t g_balance_mask_u23 = 0U;
+static uint8_t g_cfg_u19[6] = {0};
+static uint8_t g_cfg_u23[6] = {0};
 
 static esp_err_t ltc6811_write_config(const uint8_t cfg_u19[6], const uint8_t cfg_u23[6])
 {
@@ -298,21 +300,26 @@ static esp_err_t ltc6811_set_balance_masks(uint16_t mask_u19, uint16_t mask_u23)
         return ESP_OK;
     }
 
-    uint8_t cfg_u19[6] = {0};
-    uint8_t cfg_u23[6] = {0};
+    uint8_t cfg_u19[6];
+    uint8_t cfg_u23[6];
+    memcpy(cfg_u19, g_cfg_u19, sizeof(cfg_u19));
+    memcpy(cfg_u23, g_cfg_u23, sizeof(cfg_u23));
 
     /* DCC bits are stored in CFGR4 and CFGR5.
+     * Preserve the other configuration bytes while only updating the DCC mask.
      * CFGR4 bits[0:7] = DCC1..DCC8
      * CFGR5 bits[0:3] = DCC9..DCC12, bits[4:7] = DCTO
      */
     cfg_u19[4] = (uint8_t)(mask_u19 & 0xFFU);
-    cfg_u19[5] = (uint8_t)(((0U & 0x0FU) << 4) | ((mask_u19 >> 8) & 0x0FU));
+    cfg_u19[5] = (uint8_t)(((cfg_u19[5] & 0xF0U) | ((mask_u19 >> 8) & 0x0FU)) & 0xFFU);
 
     cfg_u23[4] = (uint8_t)(mask_u23 & 0xFFU);
-    cfg_u23[5] = (uint8_t)(((0U & 0x0FU) << 4) | ((mask_u23 >> 8) & 0x0FU));
+    cfg_u23[5] = (uint8_t)(((cfg_u23[5] & 0xF0U) | ((mask_u23 >> 8) & 0x0FU)) & 0xFFU);
 
     esp_err_t ret = ltc6811_write_config(cfg_u19, cfg_u23);
     if (ret == ESP_OK) {
+        memcpy(g_cfg_u19, cfg_u19, sizeof(g_cfg_u19));
+        memcpy(g_cfg_u23, cfg_u23, sizeof(g_cfg_u23));
         g_balance_mask_u19 = mask_u19;
         g_balance_mask_u23 = mask_u23;
     }
