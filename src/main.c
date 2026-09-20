@@ -100,6 +100,7 @@ void app_main(void)
     g_state_mutex = xSemaphoreCreateMutex();
 
     if (run_boot_sequence() != ESP_OK) {
+        wifi_manager_start();
         xTaskCreate(cell_monitor_task,  "cell_mon",  4096, NULL, 5, NULL);
         xTaskCreate(black_box_task,     "blackbox",  4096, NULL, 4, NULL);
         xTaskCreate(wifi_manager_task,  "wifi",      4096, NULL, 3, NULL);

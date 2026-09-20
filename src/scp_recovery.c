@@ -286,10 +286,19 @@ void scp_recovery_task(void *arg)
             g_sys.scp_state    = SCP_STATE_NORMAL;
             g_sys.fault_active = false;
             xSemaphoreGive(g_state_mutex);
+
+            if (restore_mode == MODE_FULL_POWER) {
+                gate_enable_full();
+            } else if (restore_mode == MODE_PWM_50) {
+                gate_enable_pwm(restore_duty);
+            } else {
+                gate_disable();
+            }
+
             if (PIN_STATUS_LED != GPIO_NUM_NC) {
                 gpio_set_level(PIN_STATUS_LED, 1);  // solid on = OK
             }
-            ESP_LOGI(TAG, "Gate restored — NORMAL");
+            ESP_LOGI(TAG, "Gate restored — NORMAL (mode=%d duty=%u%%)", restore_mode, restore_duty);
             mqtt_publish_fault("RECOVERED", 0);
         }
     }
