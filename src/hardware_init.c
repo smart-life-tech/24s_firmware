@@ -37,7 +37,7 @@ static void init_gpio(void)
     };
     gpio_config(&fault_cfg);
 
-    if (PIN_STATUS_LED >= 0) {
+    if (PIN_STATUS_LED != GPIO_NUM_NC) {
         gpio_config_t led_cfg = {
             .pin_bit_mask = (1ULL << PIN_STATUS_LED),
             .mode         = GPIO_MODE_OUTPUT,
@@ -124,7 +124,7 @@ esp_err_t hardware_init(void)
 
 void led_blink_fault(void)
 {
-    if (PIN_STATUS_LED < 0) {
+    if (PIN_STATUS_LED == GPIO_NUM_NC) {
         return;
     }
     for (int i = 0; i < 4; i++) {
@@ -137,7 +137,7 @@ void led_blink_fault(void)
 
 void led_blink_amber_1hz(void)
 {
-    if (PIN_STATUS_LED < 0) {
+    if (PIN_STATUS_LED == GPIO_NUM_NC) {
         return;
     }
     gpio_set_level(PIN_STATUS_LED, 1);

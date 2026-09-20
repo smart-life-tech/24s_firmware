@@ -104,7 +104,7 @@ static bool check_permanent_fault(void)
  * ---------------------------------------------------------------- */
 static void led_blink_task_red(void *arg)
 {
-    if (PIN_STATUS_LED < 0) {
+    if (PIN_STATUS_LED == GPIO_NUM_NC) {
         vTaskDelete(NULL);
         return;
     }
@@ -180,7 +180,7 @@ void scp_recovery_task(void *arg)
             mqtt_publish_fault("PERMANENT_FAULT", peak_current);
             /* Blink LED — wait for reset or MQTT clear */
             while (g_sys.permanent_fault) {
-                if (PIN_STATUS_LED >= 0) {
+                if (PIN_STATUS_LED != GPIO_NUM_NC) {
                     gpio_set_level(PIN_STATUS_LED, 1);
                     vTaskDelay(pdMS_TO_TICKS(200));
                     gpio_set_level(PIN_STATUS_LED, 0);
@@ -214,10 +214,7 @@ void scp_recovery_task(void *arg)
         if (led_task_handle) {
             vTaskDelete(led_task_handle);
             led_task_handle = NULL;
-            if (PIN_STATUS_LED >= 0) {
-                gpio_set_level(PIN_STATUS_LED, 0);
-            }
-        }
+            if (PIN_STATUS_LED != GPIO_NUM_NC) {
 
         /* ---- RETRY PROBE: check load-side voltage ---- */
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
@@ -278,7 +275,7 @@ void scp_recovery_task(void *arg)
             g_sys.scp_state    = SCP_STATE_NORMAL;
             g_sys.fault_active = false;
             xSemaphoreGive(g_state_mutex);
-            if (PIN_STATUS_LED >= 0) {
+            if (PIN_STATUS_LED != GPIO_NUM_NC) {
                 gpio_set_level(PIN_STATUS_LED, 1);  // solid on = OK
             }
             ESP_LOGI(TAG, "Gate restored — NORMAL");

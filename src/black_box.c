@@ -283,10 +283,11 @@ void black_box_write_fault(fault_type_t fault, int32_t peak_current,
 
 void black_box_write_recovery_attempt(uint32_t retry_count, uint32_t probe_mv)
 {
-    /* Keep retry_count in the raw fault_flags byte; write the actual pack voltage
-     * to pack_voltage_mv so the MQTT black-box payload will not report the retry
-     * count as a voltage. */
-    bb_write_record(0x0021, (int32_t)probe_mv, g_sys.pack_voltage_mv,
+    /* Keep the current field truthful: there is no valid current sample during
+     * the probe step, so record 0 mA instead of treating the probe voltage as a
+     * current. The retry count remains in fault_flags, matching the export schema. */
+    (void)probe_mv;
+    bb_write_record(0x0021, 0, g_sys.pack_voltage_mv,
                     (uint8_t)(retry_count & 0xFFU), NULL,
                     (uint8_t)g_sys.temp_avg_c);
 }
@@ -296,7 +297,10 @@ void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
 {
     uint16_t cells[CELL_COUNT];
     memcpy(cells, g_sys.cell_mv, sizeof(cells));
-    bb_write_record(0x0030, cell_idx, cell_mv, (uint8_t)fault,
+    /* Current is not meaningful for a threshold event. Preserve the threshold
+     * fault and cell voltage data, while keeping the current field at 0. */
+    (void)cell_idx;
+    bb_write_record(0x0030, 0, cell_mv, (uint8_t)fault,
                     cells, (uint8_t)g_sys.temp_avg_c);
 }
 
