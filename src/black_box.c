@@ -1,329 +1,161 @@
 /**
- * black_box.c — Offline Data Logger (Section 10)
+ * black_box.c — Offline Data Logger
  *
- * Writes to a fixed-size flash partition using a bounded record log with an
- * explicit full-buffer reset policy. This avoids unsafe partial rewrites while
- * preserving the PWA-compatible black-box export format.
- * Fixed 64-byte records. Max 500 records (~8 hours at 60s intervals).
- * Runs from boot — no Wi-Fi required.
- * On MQTT reconnect, publishes each buffered record as one JSON object to
- * hub/{id}/blackbox, matching the current PWA expectations.
+ * 64-byte records stored in a flash-safe circular log. The record area is
+ * divided into 4 KiB sectors (64 records/sector); a sector is erased only when
+ * the ring is about to reuse it. Header metadata is journaled in two alternating
+ * sectors. Upload runs in a worker task so the MQTT callback is never blocked.
  */
 
 #include "black_box.h"
 #include "config.h"
 #include "esp_log.h"
 #include "esp_partition.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include <string.h>
+#include <stdio.h>
 #include <time.h>
+#include <stdlib.h>
 
 static const char *TAG = "BLACK_BOX";
 
-/* ----------------------------------------------------------------
- *  Record layout — 64 bytes exactly (matches Section 10.1)
- * ---------------------------------------------------------------- */
+#ifndef CONFIG_DEVICE_ID
+#define CONFIG_DEVICE_ID "24S-HUB-001"
+#endif
+
+#define BB_PARTITION_LABEL          "black_box"
+#define BB_MAX_RECORDS              500U
+#define BB_RECORD_SIZE              64U
+#define BB_HEADER_SLOT_COUNT        2U
+#define BB_MAGIC                    0xBB24BBBBU
+#define BB_HEADER_SLOT_SIZE         4096U
+#define BB_RECORDS_PER_SECTOR       64U
+#define BB_RECORD_SECTOR_COUNT      ((BB_MAX_RECORDS + BB_RECORDS_PER_SECTOR - 1U) / BB_RECORDS_PER_SECTOR)
+#define BB_RECORD_DATA_OFFSET       (BB_HEADER_SLOT_COUNT * BB_HEADER_SLOT_SIZE)
+#define BB_RECORD_DATA_SIZE         (BB_RECORD_SECTOR_COUNT * BB_HEADER_SLOT_SIZE)
+#define BB_UPLOAD_QUEUE_LEN         2U
+
 typedef struct __attribute__((packed)) {
-    uint32_t timestamp;           // bytes 0-3   Unix timestamp
-    uint16_t event_type;          // bytes 4-5   event code
-    uint32_t pack_voltage_mv;     // bytes 6-9
-    int32_t  pack_current_ma;     // bytes 10-13 signed
-    uint8_t  fault_flags;         // byte 14
-    uint16_t cell_mv[24];         // bytes 15-62 (24 × 2 = 48 bytes)
-    uint8_t  avg_temp_c;          // byte 63
+    uint32_t timestamp;
+    uint16_t event_type;
+    uint32_t pack_voltage_mv;
+    int32_t  pack_current_ma;
+    uint8_t  event_aux;
+    uint16_t cell_mv[24];
+    uint8_t  avg_temp_c;
 } bb_record_t;
 
-_Static_assert(sizeof(bb_record_t) == 64, "bb_record_t must be 64 bytes");
-
-/* ----------------------------------------------------------------
- *  Ring buffer header — stored at start of partition
- * ---------------------------------------------------------------- */
-#define BB_PARTITION_LABEL   "black_box"
-#define BB_MAX_RECORDS       500
-#define BB_RECORD_SIZE       64
-#define BB_HEADER_SIZE       sizeof(bb_header_t)
-#define BB_HEADER_SLOT_COUNT 2U
-#define BB_MAGIC             0xBB24BBBB
-#define BB_HEADER_SLOT_SIZE  4096U
-#define BB_RECORD_DATA_OFFSET_DEFAULT  (BB_HEADER_SLOT_COUNT * BB_HEADER_SLOT_SIZE)
+_Static_assert(sizeof(bb_record_t) == BB_RECORD_SIZE, "bb_record_t must be 64 bytes");
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
-    uint32_t sequence;     // total records ever written; monotonic across wraps
-    uint32_t write_idx;    // next write position (0-based)
-    uint32_t count;        // total records stored (saturates at BB_MAX_RECORDS)
-    uint32_t crc;          // simple XOR checksum of above 4 fields
+    uint32_t sequence;
+    uint32_t write_idx;
+    uint32_t count;
+    uint32_t crc;
 } bb_header_t;
 
 static const esp_partition_t *bb_partition = NULL;
-static bb_header_t            bb_hdr;
-static uint32_t               bb_hdr_slot = 0U;
-static SemaphoreHandle_t      bb_mutex;
+static bb_header_t bb_hdr;
+static uint32_t bb_hdr_slot = 0U;
+static SemaphoreHandle_t bb_mutex = NULL;
+static QueueHandle_t bb_upload_queue = NULL;
+static mqtt_publish_fn_t bb_publish_fn = NULL;
 
-/* ----------------------------------------------------------------
- *  CRC helper
- * ---------------------------------------------------------------- */
 static uint32_t header_crc(const bb_header_t *h)
 {
     return h->magic ^ h->sequence ^ h->write_idx ^ h->count;
 }
 
-/* ----------------------------------------------------------------
- *  Partition access helpers
- * ---------------------------------------------------------------- */
 static uint32_t header_slot_offset(uint32_t slot)
 {
-    uint32_t slot_size = (bb_partition && bb_partition->erase_size != 0U)
-        ? bb_partition->erase_size
-        : BB_HEADER_SLOT_SIZE;
-    return slot * slot_size;
-}
-
-static esp_err_t hdr_read(void)
-{
-    bb_header_t slot_a = {0};
-    bb_header_t slot_b = {0};
-
-    esp_err_t err_a = esp_partition_read(bb_partition, header_slot_offset(0), &slot_a, sizeof(slot_a));
-    esp_err_t err_b = esp_partition_read(bb_partition, header_slot_offset(1), &slot_b, sizeof(slot_b));
-
-    if (err_a != ESP_OK && err_b != ESP_OK) {
-        return ESP_FAIL;
-    }
-
-    bool valid_a = (slot_a.magic == BB_MAGIC && slot_a.crc == header_crc(&slot_a));
-    bool valid_b = (slot_b.magic == BB_MAGIC && slot_b.crc == header_crc(&slot_b));
-
-    if (!valid_a && !valid_b) {
-        bb_hdr.magic     = BB_MAGIC;
-        bb_hdr.sequence  = 0U;
-        bb_hdr.write_idx = 0U;
-        bb_hdr.count     = 0U;
-        bb_hdr.crc       = header_crc(&bb_hdr);
-        bb_hdr_slot      = 0U;
-        return ESP_OK;
-    }
-
-    if (valid_a && valid_b) {
-        bb_hdr = (slot_a.sequence >= slot_b.sequence) ? slot_a : slot_b;
-        bb_hdr_slot = (slot_a.sequence >= slot_b.sequence) ? 0U : 1U;
-        return ESP_OK;
-    }
-
-    bb_hdr = valid_a ? slot_a : slot_b;
-    bb_hdr_slot = valid_a ? 0U : 1U;
-    return ESP_OK;
-}
-
-static esp_err_t hdr_write(void)
-{
-    bb_hdr.crc = header_crc(&bb_hdr);
-
-    uint32_t slot_index = bb_hdr_slot;
-    uint32_t slot_offset = header_slot_offset(slot_index);
     uint32_t erase_size = (bb_partition && bb_partition->erase_size != 0U)
-        ? bb_partition->erase_size
-        : BB_HEADER_SLOT_SIZE;
+        ? bb_partition->erase_size : BB_HEADER_SLOT_SIZE;
+    return slot * erase_size;
+}
 
-    if ((slot_offset % erase_size) != 0U || (slot_offset + erase_size) > bb_partition->size) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    esp_partition_erase_range(bb_partition, slot_offset, erase_size);
-
-    esp_err_t err = esp_partition_write(bb_partition, slot_offset, &bb_hdr, sizeof(bb_hdr));
-    if (err == ESP_OK) {
-        bb_hdr_slot = (slot_index + 1U) % BB_HEADER_SLOT_COUNT;
-    }
-    return err;
+static uint32_t record_sector_offset(uint32_t sector)
+{
+    return BB_RECORD_DATA_OFFSET + (sector * BB_HEADER_SLOT_SIZE);
 }
 
 static uint32_t record_offset(uint32_t idx)
 {
-    uint32_t start = BB_RECORD_DATA_OFFSET_DEFAULT;
-    if (bb_partition && bb_partition->erase_size != 0U) {
-        start = BB_HEADER_SLOT_COUNT * bb_partition->erase_size;
-    }
-    return start + (idx % BB_MAX_RECORDS) * BB_RECORD_SIZE;
+    return BB_RECORD_DATA_OFFSET + ((idx % BB_MAX_RECORDS) * BB_RECORD_SIZE);
 }
 
-/* ----------------------------------------------------------------
- *  Init
- * ---------------------------------------------------------------- */
-void black_box_init(void)
+static esp_err_t hdr_write(void)
 {
-    bb_mutex = xSemaphoreCreateMutex();
+    if (!bb_partition) return ESP_ERR_INVALID_STATE;
 
-    bb_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
-                                            ESP_PARTITION_SUBTYPE_ANY,
-                                            BB_PARTITION_LABEL);
-    if (!bb_partition) {
-        ESP_LOGE(TAG, "black_box partition not found! Check partition table.");
-        return;
+    bb_hdr.crc = header_crc(&bb_hdr);
+    uint32_t slot = bb_hdr_slot;
+    uint32_t offset = header_slot_offset(slot);
+    uint32_t erase_size = (bb_partition->erase_size != 0U)
+        ? bb_partition->erase_size : BB_HEADER_SLOT_SIZE;
+
+    if ((offset % erase_size) != 0U || (offset + erase_size) > bb_partition->size) {
+        return ESP_ERR_INVALID_SIZE;
     }
 
-    /* Read and validate header */
-    hdr_read();
-    if (bb_hdr.magic != BB_MAGIC ||
-        bb_hdr.crc   != header_crc(&bb_hdr)) {
-        ESP_LOGW(TAG, "Invalid header — formatting partition");
-        esp_partition_erase_range(bb_partition, 0, bb_partition->size);
-        bb_hdr.magic     = BB_MAGIC;
-        bb_hdr.sequence  = 0U;
-        bb_hdr.write_idx = 0U;
-        bb_hdr.count     = 0U;
-        bb_hdr_slot      = 0U;
-        hdr_write();
-    }
+    esp_err_t err = esp_partition_erase_range(bb_partition, offset, erase_size);
+    if (err != ESP_OK) return err;
 
-    ESP_LOGI(TAG, "Black Box ready: %d records stored, next write idx %d",
-             bb_hdr.count, bb_hdr.write_idx);
+    err = esp_partition_write(bb_partition, offset, &bb_hdr, sizeof(bb_hdr));
+    if (err == ESP_OK) {
+        bb_hdr_slot = (slot + 1U) % BB_HEADER_SLOT_COUNT;
+    }
+    return err;
 }
 
-/* ----------------------------------------------------------------
- *  Core write function
- * ---------------------------------------------------------------- */
-static void bb_write_record(uint16_t event_type, int32_t current_ma,
-                             uint32_t voltage_mv, uint8_t fault_flags,
-                             const uint16_t *cell_mv, uint8_t temp_c)
+static esp_err_t hdr_read(void)
 {
-    if (!bb_partition) return;
+    bb_header_t a = {0};
+    bb_header_t b = {0};
+    esp_err_t ea = esp_partition_read(bb_partition, header_slot_offset(0), &a, sizeof(a));
+    esp_err_t eb = esp_partition_read(bb_partition, header_slot_offset(1), &b, sizeof(b));
 
-    xSemaphoreTake(bb_mutex, portMAX_DELAY);
+    if (ea != ESP_OK && eb != ESP_OK) return ESP_FAIL;
 
-    /* Flash-safe bounded-file policy:
-     * once the log reaches capacity, reset the in-memory sequence and discard the
-     * oldest content in one clean step rather than risking unsafe partial writes
-     * to the NOR flash region. This is a safe full-buffer reset, not a true ring. */
-    if (bb_hdr.count >= BB_MAX_RECORDS) {
-        bb_hdr.write_idx = 0U;
-        bb_hdr.count = 0U;
+    bool va = (a.magic == BB_MAGIC && a.crc == header_crc(&a) && a.write_idx < BB_MAX_RECORDS && a.count <= BB_MAX_RECORDS);
+    bool vb = (b.magic == BB_MAGIC && b.crc == header_crc(&b) && b.write_idx < BB_MAX_RECORDS && b.count <= BB_MAX_RECORDS);
+
+    if (!va && !vb) {
+        memset(&bb_hdr, 0, sizeof(bb_hdr));
+        bb_hdr.magic = BB_MAGIC;
+        bb_hdr_slot = 0U;
+        return ESP_OK;
     }
 
-    bb_record_t rec = {0};
-    rec.timestamp       = (uint32_t)(time(NULL));
-    rec.event_type      = event_type;
-    rec.pack_voltage_mv = voltage_mv;
-    rec.pack_current_ma = current_ma;
-    rec.fault_flags     = fault_flags;
-    rec.avg_temp_c      = temp_c;
-
-    if (cell_mv) {
-        memcpy(rec.cell_mv, cell_mv, CELL_COUNT * sizeof(uint16_t));
+    if (va && (!vb || a.sequence >= b.sequence)) {
+        bb_hdr = a;
+        bb_hdr_slot = 0U;
     } else {
-        /* Fill from global state */
-        memcpy(rec.cell_mv, g_sys.cell_mv, CELL_COUNT * sizeof(uint16_t));
+        bb_hdr = b;
+        bb_hdr_slot = 1U;
     }
+    return ESP_OK;
+}
 
-    uint32_t offset = record_offset(bb_hdr.write_idx);
-    esp_partition_write(bb_partition, offset, &rec, sizeof(rec));
+static esp_err_t erase_record_sector(uint32_t sector)
+{
+    if (!bb_partition || sector >= BB_RECORD_SECTOR_COUNT) return ESP_ERR_INVALID_ARG;
+    return esp_partition_erase_range(bb_partition, record_sector_offset(sector), BB_HEADER_SLOT_SIZE);
+}
 
-    bb_hdr.sequence++;
-    bb_hdr.write_idx = (bb_hdr.write_idx + 1U) % BB_MAX_RECORDS;
-    if (bb_hdr.count < BB_MAX_RECORDS) bb_hdr.count++;
-    if ((bb_hdr.sequence % 8U) == 0U || bb_hdr.count == BB_MAX_RECORDS) {
-        hdr_write();
+static esp_err_t erase_all_record_sectors(void)
+{
+    if (!bb_partition) return ESP_ERR_INVALID_STATE;
+    for (uint32_t s = 0; s < BB_RECORD_SECTOR_COUNT; s++) {
+        esp_err_t err = erase_record_sector(s);
+        if (err != ESP_OK) return err;
     }
-
-    xSemaphoreGive(bb_mutex);
-
-    ESP_LOGD(TAG, "Record [0x%04X] written at idx %d", event_type,
-             (bb_hdr.write_idx - 1 + BB_MAX_RECORDS) % BB_MAX_RECORDS);
+    return ESP_OK;
 }
 
-/* ----------------------------------------------------------------
- *  Public write helpers
- * ---------------------------------------------------------------- */
-
-void black_box_write_boot_event(void)
-{
-    bb_write_record(0x0050, 0, g_sys.pack_voltage_mv, 0, NULL,
-                    (uint8_t)g_sys.temp_avg_c);
-    ESP_LOGI(TAG, "Boot event logged");
-}
-
-void black_box_write_telemetry_snapshot(void)
-{
-    bb_write_record(0x0001,
-                    g_sys.pack_current_ma,
-                    g_sys.pack_voltage_mv,
-                    0, NULL,
-                    (uint8_t)g_sys.temp_avg_c);
-}
-
-void black_box_write_gate_change(op_mode_t mode)
-{
-    bb_write_record(0x0010, 0, g_sys.pack_voltage_mv,
-                    (uint8_t)mode, NULL, (uint8_t)g_sys.temp_avg_c);
-}
-
-void black_box_write_fault(fault_type_t fault, int32_t peak_current,
-                            uint32_t voltage_mv)
-{
-    uint16_t ev;
-    uint8_t retry_byte = 0U;
-    switch (fault) {
-    case FAULT_SCP_TRIP:       ev = 0x0020; retry_byte = (uint8_t)(g_sys.retry_count & 0xFFU); break;
-    case FAULT_SCP_RECOVERY:   ev = 0x0021; retry_byte = (uint8_t)(g_sys.retry_count & 0xFFU); break;
-    case FAULT_SCP_PERMANENT:  ev = 0x0022; retry_byte = (uint8_t)(g_sys.retry_count & 0xFFU); break;
-    case FAULT_CELL_OV:        ev = 0x0030; break;
-    case FAULT_CELL_UV:        ev = 0x0031; break;
-    case FAULT_PACK_OV:        ev = 0x0032; break;
-    case FAULT_TEMP_WARN:      ev = 0x0040; break;
-    case FAULT_TEMP_SHUTDOWN:  ev = 0x0041; break;
-    case FAULT_INA240_FAIL:    ev = 0x0002; break;
-    default:                   ev = 0x0000; break;
-    }
-    bb_write_record(ev, peak_current, voltage_mv,
-                    retry_byte, NULL, (uint8_t)g_sys.temp_avg_c);
-    ESP_LOGW(TAG, "Fault [0x%04X] logged, peak %d mA", ev, peak_current);
-}
-
-void black_box_write_recovery_attempt(uint32_t retry_count, uint32_t probe_mv)
-{
-    /* Keep the current field truthful: there is no valid current sample during
-     * the probe step, so record 0 mA instead of treating the probe voltage as a
-     * current. The retry count remains in fault_flags, matching the export schema. */
-    (void)probe_mv;
-    bb_write_record(0x0021, 0, g_sys.pack_voltage_mv,
-                    (uint8_t)(retry_count & 0xFFU), NULL,
-                    (uint8_t)g_sys.temp_avg_c);
-}
-
-void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
-                                     uint16_t cell_mv)
-{
-    uint16_t cells[CELL_COUNT];
-    memcpy(cells, g_sys.cell_mv, sizeof(cells));
-
-    uint16_t event_code = (fault == FAULT_CELL_UV) ? 0x0031U : 0x0030U;
-    (void)cell_idx;
-    (void)cell_mv;
-
-    /* Preserve the real pack voltage in the exported voltage field. The
-     * offending cell details remain in the record payload; the current field is
-     * kept as 0 because this event is not a current sample. */
-    bb_write_record(event_code, 0, g_sys.pack_voltage_mv, (uint8_t)fault,
-                    cells, (uint8_t)g_sys.temp_avg_c);
-}
-
-void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)
-{
-    uint16_t event_code = (temp_c >= TEMP_SHUTDOWN_C) ? 0x0041 : 0x0040;
-    bb_write_record(event_code,
-                    g_sys.pack_current_ma,
-                    g_sys.pack_voltage_mv,
-                    0,
-                    NULL,
-                    (uint8_t)temp_c);
-}
-
-/* ----------------------------------------------------------------
- *  Upload buffer as JSON to MQTT on reconnect
- * ---------------------------------------------------------------- */
 static const char *bb_event_name(uint16_t event_type)
 {
     switch (event_type) {
@@ -333,87 +165,320 @@ static const char *bb_event_name(uint16_t event_type)
     case 0x0020: return "SCP_TRIP";
     case 0x0021: return "SCP_RECOVERY";
     case 0x0022: return "SCP_PERMANENT";
+    case 0x0023: return "OVERCURRENT";
     case 0x0030: return "CELL_OV";
     case 0x0031: return "CELL_UV";
     case 0x0032: return "PACK_OV";
     case 0x0040: return "TEMP_WARN";
     case 0x0041: return "TEMP_SHUTDOWN";
+    case 0x0042: return "TEMP_SENSOR_FAIL";
     case 0x0050: return "BOOT";
     default:     return "UNKNOWN";
     }
 }
 
-void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
+static void bb_upload_task(void *arg)
 {
-    if (!bb_partition || bb_hdr.count == 0 || !publish_fn) return;
+    (void)arg;
+    uint8_t token;
+
+    for (;;) {
+        if (xQueueReceive(bb_upload_queue, &token, portMAX_DELAY) != pdTRUE) continue;
+        (void)token;
+        if (!bb_partition || !bb_publish_fn) continue;
+
+        xSemaphoreTake(bb_mutex, portMAX_DELAY);
+        uint32_t count = bb_hdr.count;
+        uint32_t start = (count < BB_MAX_RECORDS) ? 0U : bb_hdr.write_idx;
+        uint32_t sequence_before = bb_hdr.sequence;
+        bb_record_t *records = NULL;
+
+        if (count > 0U) records = (bb_record_t *)malloc(count * sizeof(bb_record_t));
+        if (count > 0U && !records) {
+            xSemaphoreGive(bb_mutex);
+            ESP_LOGE(TAG, "Black Box upload allocation failed");
+            continue;
+        }
+
+        bool read_ok = true;
+        for (uint32_t i = 0; i < count; i++) {
+            if (esp_partition_read(bb_partition,
+                                   record_offset((start + i) % BB_MAX_RECORDS),
+                                   &records[i], sizeof(bb_record_t)) != ESP_OK) {
+                read_ok = false;
+                break;
+            }
+        }
+        xSemaphoreGive(bb_mutex);
+
+        if (!read_ok) {
+            free(records);
+            ESP_LOGW(TAG, "Black Box record read failed during upload; buffer retained");
+            continue;
+        }
+        if (count == 0U) {
+            free(records);
+            continue;
+        }
+
+        char topic[64];
+        snprintf(topic, sizeof(topic), "hub/%s/blackbox", CONFIG_DEVICE_ID);
+        bool upload_ok = true;
+
+        for (uint32_t i = 0; i < count; i++) {
+            char json[320];
+            uint32_t retry_count = 0U;
+            uint32_t cell_index = 0U;
+            uint32_t sensor_index = 0U;
+
+            if (records[i].event_type == 0x0020U ||
+                records[i].event_type == 0x0021U ||
+                records[i].event_type == 0x0022U) {
+                retry_count = records[i].event_aux;
+            }
+            if (records[i].event_type == 0x0030U || records[i].event_type == 0x0031U) {
+                cell_index = (uint32_t)records[i].event_aux + 1U;
+            }
+            if (records[i].event_type == 0x0040U ||
+                records[i].event_type == 0x0041U ||
+                records[i].event_type == 0x0042U) {
+                sensor_index = (uint32_t)records[i].event_aux + 1U;
+            }
+
+            int n = snprintf(json, sizeof(json),
+                "{\"timestamp\":%u,\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
+                "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\",\"retry_count\":%u,"
+                "\"cell_index\":%u,\"sensor_index\":%u}",
+                records[i].timestamp,
+                bb_event_name(records[i].event_type),
+                records[i].pack_current_ma,
+                records[i].pack_voltage_mv,
+                records[i].event_type,
+                retry_count,
+                cell_index,
+                sensor_index);
+
+            if (n <= 0 || !bb_publish_fn(topic, json)) {
+                upload_ok = false;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        xSemaphoreTake(bb_mutex, portMAX_DELAY);
+        if (upload_ok && bb_hdr.sequence == sequence_before && bb_hdr.count == count) {
+            esp_err_t erase_err = erase_all_record_sectors();
+            if (erase_err == ESP_OK) {
+                bb_hdr.magic = BB_MAGIC;
+                bb_hdr.sequence = sequence_before;
+                bb_hdr.write_idx = 0U;
+                bb_hdr.count = 0U;
+                if (hdr_write() != ESP_OK) {
+                    ESP_LOGW(TAG, "Black Box header reset failed after upload");
+                }
+            } else {
+                ESP_LOGW(TAG, "Black Box clear erase failed: %s", esp_err_to_name(erase_err));
+            }
+        }
+        xSemaphoreGive(bb_mutex);
+
+        if (!upload_ok) {
+            ESP_LOGW(TAG, "Black Box upload incomplete; buffered records retained");
+        }
+        free(records);
+    }
+}
+
+void black_box_init(void)
+{
+    bb_mutex = xSemaphoreCreateMutex();
+    bb_upload_queue = xQueueCreate(BB_UPLOAD_QUEUE_LEN, sizeof(uint8_t));
+    if (!bb_mutex || !bb_upload_queue) {
+        ESP_LOGE(TAG, "Black Box synchronization objects could not be created");
+        return;
+    }
+
+    bb_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+                                            ESP_PARTITION_SUBTYPE_ANY,
+                                            BB_PARTITION_LABEL);
+    if (!bb_partition) {
+        ESP_LOGE(TAG, "Black Box partition not found");
+        return;
+    }
+
+    if (bb_partition->erase_size < BB_HEADER_SLOT_SIZE ||
+        (BB_RECORD_DATA_OFFSET + BB_RECORD_DATA_SIZE) > bb_partition->size) {
+        ESP_LOGE(TAG, "Black Box partition too small: %u bytes", (unsigned)bb_partition->size);
+        bb_partition = NULL;
+        return;
+    }
+
+    bool header_valid = (hdr_read() == ESP_OK &&
+                         bb_hdr.magic == BB_MAGIC &&
+                         bb_hdr.crc == header_crc(&bb_hdr));
+    if (!header_valid) {
+        ESP_LOGW(TAG, "Invalid Black Box header; formatting record area");
+        if (erase_all_record_sectors() != ESP_OK) {
+            ESP_LOGE(TAG, "Black Box record-area erase failed");
+            bb_partition = NULL;
+            return;
+        }
+        memset(&bb_hdr, 0, sizeof(bb_hdr));
+        bb_hdr.magic = BB_MAGIC;
+        bb_hdr_slot = 0U;
+        if (hdr_write() != ESP_OK) {
+            ESP_LOGE(TAG, "Black Box header write failed");
+            bb_partition = NULL;
+            return;
+        }
+    }
+
+    if (xTaskCreate(bb_upload_task, "bb_upload", 6144, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Black Box upload task creation failed");
+    }
+
+    ESP_LOGI(TAG, "Black Box ready: %u records stored, next idx %u", bb_hdr.count, bb_hdr.write_idx);
+}
+
+static void bb_write_record(uint16_t event_type, int32_t current_ma,
+                            uint32_t voltage_mv, uint8_t event_aux,
+                            const uint16_t *cell_mv, uint8_t temp_c)
+{
+    if (!bb_partition || !bb_mutex) return;
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
-    uint32_t count = bb_hdr.count;
-    uint32_t start = (bb_hdr.count < BB_MAX_RECORDS) ?
-                     0 : bb_hdr.write_idx;
-
-    ESP_LOGI(TAG, "Uploading %d records to MQTT...", count);
-
-    char json_buf[256];
-    char topic[64];
-    snprintf(topic, sizeof(topic), "hub/%s/blackbox", CONFIG_DEVICE_ID);
-
-    bool upload_ok = true;
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t idx = (start + i) % BB_MAX_RECORDS;
-        uint32_t offset = record_offset(idx);
-
-        bb_record_t rec;
-        esp_partition_read(bb_partition, offset, &rec, sizeof(rec));
-
-        uint32_t retry_count = 0U;
-        if (rec.event_type == 0x0020 || rec.event_type == 0x0021 || rec.event_type == 0x0022) {
-            retry_count = (uint32_t)rec.fault_flags;
+    if (bb_hdr.count >= BB_MAX_RECORDS &&
+        (bb_hdr.write_idx % BB_RECORDS_PER_SECTOR) == 0U) {
+        if (erase_record_sector(bb_hdr.write_idx / BB_RECORDS_PER_SECTOR) != ESP_OK) {
+            ESP_LOGE(TAG, "Black Box sector erase failed at idx %u", bb_hdr.write_idx);
+            xSemaphoreGive(bb_mutex);
+            return;
         }
-
-        snprintf(json_buf, sizeof(json_buf),
-            "{\"timestamp\":%u,\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
-            "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\",\"retry_count\":%u}",
-            rec.timestamp, bb_event_name(rec.event_type), rec.pack_current_ma,
-            rec.pack_voltage_mv, rec.event_type, retry_count);
-
-        if (!publish_fn(topic, json_buf)) {
-            ESP_LOGW(TAG, "Black Box publish failed at record %u — leaving buffer intact", i);
-            upload_ok = false;
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
-    if (upload_ok) {
-        esp_partition_erase_range(bb_partition, 0, bb_partition->size);
-        bb_hdr.magic     = BB_MAGIC;
-        bb_hdr.write_idx = 0;
-        bb_hdr.count     = 0;
-        hdr_write();
-        ESP_LOGI(TAG, "Black Box upload complete — buffer cleared");
+    bb_record_t rec = {0};
+    rec.timestamp = (uint32_t)time(NULL);
+    rec.event_type = event_type;
+    rec.pack_voltage_mv = voltage_mv;
+    rec.pack_current_ma = current_ma;
+    rec.event_aux = event_aux;
+    rec.avg_temp_c = temp_c;
+    if (cell_mv) memcpy(rec.cell_mv, cell_mv, sizeof(rec.cell_mv));
+    else memcpy(rec.cell_mv, g_sys.cell_mv, sizeof(rec.cell_mv));
+
+    esp_err_t err = esp_partition_write(bb_partition, record_offset(bb_hdr.write_idx), &rec, sizeof(rec));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Black Box record write failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(bb_mutex);
+        return;
+    }
+
+    bb_hdr.sequence++;
+    bb_hdr.write_idx = (bb_hdr.write_idx + 1U) % BB_MAX_RECORDS;
+    if (bb_hdr.count < BB_MAX_RECORDS) bb_hdr.count++;
+
+    if ((bb_hdr.sequence % 8U) == 0U ||
+        (bb_hdr.write_idx % BB_RECORDS_PER_SECTOR) == 0U ||
+        bb_hdr.count == BB_MAX_RECORDS) {
+        if (hdr_write() != ESP_OK) {
+            ESP_LOGW(TAG, "Black Box header checkpoint failed");
+        }
     }
 
     xSemaphoreGive(bb_mutex);
 }
 
-/* ----------------------------------------------------------------
- *  Periodic task: write telemetry snapshot every 60s
- * ---------------------------------------------------------------- */
+void black_box_write_boot_event(void)
+{
+    bb_write_record(0x0050U, 0, g_sys.pack_voltage_mv, 0U, NULL, (uint8_t)g_sys.temp_avg_c);
+}
+
+void black_box_write_telemetry_snapshot(void)
+{
+    bb_write_record(0x0001U, g_sys.pack_current_ma, g_sys.pack_voltage_mv, 0U,
+                    NULL, (uint8_t)g_sys.temp_avg_c);
+}
+
+void black_box_write_gate_change(op_mode_t mode)
+{
+    bb_write_record(0x0010U, 0, g_sys.pack_voltage_mv, (uint8_t)mode,
+                    NULL, (uint8_t)g_sys.temp_avg_c);
+}
+
+void black_box_write_fault(fault_type_t fault, int32_t peak_current, uint32_t voltage_mv)
+{
+    uint16_t ev = 0x0000U;
+    uint8_t aux = 0U;
+    switch (fault) {
+    case FAULT_SCP_TRIP:      ev = 0x0020U; aux = (uint8_t)(g_sys.retry_count & 0xFFU); break;
+    case FAULT_SCP_RECOVERY:  ev = 0x0021U; aux = (uint8_t)(g_sys.retry_count & 0xFFU); break;
+    case FAULT_SCP_PERMANENT: ev = 0x0022U; aux = (uint8_t)(g_sys.retry_count & 0xFFU); break;
+    case FAULT_OVERCURRENT:    ev = 0x0023U; break;
+    case FAULT_CELL_OV:       ev = 0x0030U; break;
+    case FAULT_CELL_UV:       ev = 0x0031U; break;
+    case FAULT_PACK_OV:       ev = 0x0032U; break;
+    case FAULT_TEMP_WARN:     ev = 0x0040U; break;
+    case FAULT_TEMP_SHUTDOWN: ev = 0x0041U; break;
+    case FAULT_INA240_FAIL:   ev = 0x0002U; break;
+    default:                  break;
+    }
+    bb_write_record(ev, peak_current, voltage_mv, aux, NULL, (uint8_t)g_sys.temp_avg_c);
+}
+
+void black_box_write_recovery_attempt(uint32_t retry_count, uint32_t probe_mv)
+{
+    (void)probe_mv;
+    bb_write_record(0x0021U, 0, g_sys.pack_voltage_mv,
+                    (uint8_t)(retry_count & 0xFFU), NULL, (uint8_t)g_sys.temp_avg_c);
+}
+
+void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx, uint16_t cell_mv)
+{
+    (void)cell_mv;
+    uint16_t event_code = (fault == FAULT_CELL_UV) ? 0x0031U : 0x0030U;
+    bb_write_record(event_code, 0, g_sys.pack_voltage_mv, cell_idx,
+                    g_sys.cell_mv, (uint8_t)g_sys.temp_avg_c);
+}
+
+void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)
+{
+    uint16_t event_code = (temp_c >= TEMP_SHUTDOWN_C) ? 0x0041U : 0x0040U;
+    bb_write_record(event_code, g_sys.pack_current_ma, g_sys.pack_voltage_mv,
+                    sensor_idx, NULL, (uint8_t)(temp_c < 0.0f ? 0.0f : temp_c));
+}
+
+void black_box_write_temp_sensor_fault(uint8_t sensor_idx)
+{
+    bb_write_record(0x0042U, g_sys.pack_current_ma, g_sys.pack_voltage_mv,
+                    sensor_idx, NULL, 0U);
+}
+
+void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
+{
+    if (!bb_upload_queue || !publish_fn) return;
+    bb_publish_fn = publish_fn;
+    uint8_t token = 1U;
+    if (xQueueSend(bb_upload_queue, &token, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "Black Box upload request already pending");
+    }
+}
+
 void black_box_task(void *arg)
 {
-    ESP_LOGI(TAG, "Black Box task running");
+    (void)arg;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(BLACKBOX_LOG_INTERVAL_MS));
         black_box_write_telemetry_snapshot();
     }
 }
 
-/* ----------------------------------------------------------------
- *  Query: how many records are stored
- * ---------------------------------------------------------------- */
 uint32_t black_box_record_count(void)
 {
-    return bb_hdr.count;
+    uint32_t count = 0U;
+    if (bb_mutex && xSemaphoreTake(bb_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        count = bb_hdr.count;
+        xSemaphoreGive(bb_mutex);
+    }
+    return count;
 }

@@ -60,8 +60,7 @@ static void apply_mode(op_mode_t mode, uint32_t duty_pct)
 {
     if (output_inhibited()) {
         ESP_LOGW(TAG, "Output inhibited by fault state — mode change blocked");
-        ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
-        gpio_set_level(PIN_GATE_CTRL, 0);
+        gate_hold_off();
         return;
     }
 
@@ -97,6 +96,7 @@ static void apply_mode(op_mode_t mode, uint32_t duty_pct)
 
 void third_wire_task(void *arg)
 {
+    (void)arg;
     op_mode_t mode;
     uint32_t duty;
     load_mode_from_nvs(&mode, &duty);
@@ -113,7 +113,7 @@ void third_wire_task(void *arg)
     ESP_LOGI(TAG, "Gate control task running, current mode: %d", mode);
 
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(POT_POLL_INTERVAL_MS));
         if (!g_sys.boot_complete || output_inhibited()) {
             continue;
         }
@@ -142,6 +142,7 @@ void third_wire_set_mode_from_mqtt(const char *action)
         xSemaphoreGive(g_state_mutex);
     } else if (strcmp(action, "PWM") == 0) {
         mode = MODE_PWM_50;
+        if (duty == 0U) duty = 50U;
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
         g_sys.pwm_remote_override = true;
         xSemaphoreGive(g_state_mutex);
@@ -163,12 +164,7 @@ void third_wire_set_pwm_duty(uint32_t duty_pct)
      * while still driving the gate with the requested duty. */
     op_mode_t mode = (duty_pct == 0U) ? MODE_OFF : MODE_PWM_50;
 
-    if (mode == MODE_OFF) {
-        apply_mode(MODE_OFF, 0U);
-    } else {
-        pwm_set_duty(duty_pct);
-        apply_mode(MODE_PWM_50, duty_pct);
-    }
+    apply_mode(mode, duty_pct);
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.pwm_remote_override = true;

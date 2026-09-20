@@ -1,15 +1,9 @@
 /**
- * scp_recovery.c — Hardware Short-Circuit Protection + 10-Second Auto-Recovery
+ * scp_recovery.c — Hardware Short-Circuit Protection + Auto-Recovery
  *
- * Architecture:
- *  - TLV3501 → ISO5451DW: hardware trip in <500ns (no firmware in loop)
- *  - FAULT_N GPIO falling-edge ISR fires AFTER hardware has already cut the gate
- *  - This task manages the recovery state machine described in Section 6
- *
- * State machine:  NORMAL → FAULT_DETECTED → FAULT_LATCH
- *                 → RECOVERY_WAIT (10s) → RETRY_PROBE
- *                 → GATE_RESTORE → NORMAL
- *                 (3 trips in 60s) → PERMANENT_FAULT
+ * Hardware protection remains in the TLV3501 → ISO5451DW path. Firmware observes
+ * FAULT_N, logs the event, waits 10 s, applies a 5% probe when appropriate, and
+ * restores the prior output mode only when all other protection conditions are safe.
  */
 
 #include "scp_recovery.h"
@@ -27,29 +21,22 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include <stddef.h>
 
 static const char *TAG = "SCP";
 
-/* Queue from ISR → task */
+#define SCP_EVT_FAULT 1U
 static QueueHandle_t scp_evt_queue;
-
-/* Trip timestamps for 3-in-60s window */
 static int64_t trip_times_us[SCP_MAX_RETRIES];
-static int     trip_idx = 0;
+static uint32_t trip_count_total = 0U;
 
-/* ----------------------------------------------------------------
- *  FAULT_N GPIO ISR — executes in interrupt context, very fast
- * ---------------------------------------------------------------- */
 static void IRAM_ATTR fault_n_isr_handler(void *arg)
 {
-    uint8_t evt = 1;
-    xQueueSendFromISR(scp_evt_queue, &evt, NULL);
-    /* NOTE: gate is already OFF — TLV3501 cut ISO5451DW before we got here */
+    (void)arg;
+    uint8_t evt = SCP_EVT_FAULT;
+    if (scp_evt_queue) xQueueSendFromISR(scp_evt_queue, &evt, NULL);
 }
 
-/* ----------------------------------------------------------------
- *  Gate control helpers
- * ---------------------------------------------------------------- */
 static void gate_enable_full(void)
 {
     ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
@@ -57,18 +44,18 @@ static void gate_enable_full(void)
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.gate_state = GATE_FULL_POWER;
     xSemaphoreGive(g_state_mutex);
-    ESP_LOGI(TAG, "Gate → FULL POWER");
 }
 
 static void gate_enable_pwm(uint32_t duty_pct)
 {
+    if (duty_pct > 100U) duty_pct = 100U;
     uint32_t duty = (duty_pct * LEDC_DUTY_MAX) / 100UL;
-    ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty);
-    ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    g_sys.gate_state = GATE_PWM;
-    xSemaphoreGive(g_state_mutex);
-    ESP_LOGI(TAG, "Gate → PWM %d%%", duty_pct);
+    if (ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty) == ESP_OK &&
+        ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL) == ESP_OK) {
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        g_sys.gate_state = (duty_pct == 0U) ? GATE_OFF : GATE_PWM;
+        xSemaphoreGive(g_state_mutex);
+    }
 }
 
 static void gate_disable(void)
@@ -78,40 +65,26 @@ static void gate_disable(void)
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.gate_state = GATE_OFF;
     xSemaphoreGive(g_state_mutex);
-    ESP_LOGI(TAG, "Gate → OFF");
 }
 
-/* ----------------------------------------------------------------
- *  Check if 3 trips happened within 60-second window
- * ---------------------------------------------------------------- */
-static bool check_permanent_fault(void)
+static bool trip_window_reached(void)
 {
     int64_t now = esp_timer_get_time();
-    /* Store this trip time */
-    trip_times_us[trip_idx % SCP_MAX_RETRIES] = now;
-    trip_idx++;
+    trip_times_us[trip_count_total % SCP_MAX_RETRIES] = now;
+    trip_count_total++;
 
-    if (trip_idx < SCP_MAX_RETRIES) return false;
-
-    /* Check if oldest of last 3 is within 60s */
-    int64_t oldest = trip_times_us[trip_idx % SCP_MAX_RETRIES];
-    if ((now - oldest) <= ((int64_t)SCP_RETRY_WINDOW_MS * 1000LL)) {
-        return true;  // 3 trips in 60 seconds
-    }
-    return false;
+    if (trip_count_total < SCP_MAX_RETRIES) return false;
+    uint32_t oldest_index = (trip_count_total - SCP_MAX_RETRIES) % SCP_MAX_RETRIES;
+    return (now - trip_times_us[oldest_index]) <= ((int64_t)SCP_RETRY_WINDOW_MS * 1000LL);
 }
 
-/* ----------------------------------------------------------------
- *  LED helpers
- * ---------------------------------------------------------------- */
 static void led_blink_task_red(void *arg)
 {
+    (void)arg;
     if (PIN_STATUS_LED == GPIO_NUM_NC) {
         vTaskDelete(NULL);
         return;
     }
-
-    /* 5Hz red blink during recovery wait */
     while (1) {
         gpio_set_level(PIN_STATUS_LED, 1);
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -120,180 +93,146 @@ static void led_blink_task_red(void *arg)
     }
 }
 
-/* ----------------------------------------------------------------
- *  Main SCP state machine task
- * ---------------------------------------------------------------- */
+static void wait_recovery_interval(void)
+{
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    g_sys.scp_state = SCP_STATE_RECOVERY_WAIT;
+    xSemaphoreGive(g_state_mutex);
+
+    mqtt_publish_recovery_eta(SCP_RECOVERY_WAIT_MS / 1000U);
+    TaskHandle_t led_task = NULL;
+    if (xTaskCreate(led_blink_task_red, "led_red", 1024, NULL, 1, &led_task) != pdPASS) {
+        led_task = NULL;
+    }
+    vTaskDelay(pdMS_TO_TICKS(SCP_RECOVERY_WAIT_MS));
+    if (led_task) vTaskDelete(led_task);
+    if (PIN_STATUS_LED != GPIO_NUM_NC) gpio_set_level(PIN_STATUS_LED, 0);
+}
+
 void scp_recovery_task(void *arg)
 {
+    (void)arg;
     scp_evt_queue = xQueueCreate(4, sizeof(uint8_t));
+    if (!scp_evt_queue) {
+        ESP_LOGE(TAG, "SCP event queue creation failed");
+        vTaskDelete(NULL);
+        return;
+    }
 
-    /* Register ISR for FAULT_N falling edge */
-    gpio_isr_handler_add(PIN_FAULT_N, fault_n_isr_handler, NULL);
+    esp_err_t err = gpio_isr_handler_add(PIN_FAULT_N, fault_n_isr_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "FAULT_N ISR registration failed: %s", esp_err_to_name(err));
+    }
 
     if (gpio_get_level(PIN_FAULT_N) == 0) {
-        uint8_t evt = 1;
+        uint8_t evt = SCP_EVT_FAULT;
         xQueueSend(scp_evt_queue, &evt, 0);
-        ESP_LOGW(TAG, "FAULT_N already low at boot; recovery task queued immediate retry");
+        ESP_LOGW(TAG, "FAULT_N already low at startup");
     }
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.scp_state = SCP_STATE_NORMAL;
     xSemaphoreGive(g_state_mutex);
 
-    ESP_LOGI(TAG, "SCP recovery task running");
-
-    uint8_t evt;
-    TaskHandle_t led_task_handle = NULL;
-
     for (;;) {
-        /* Block until ISR signals a fault (or timeout for periodic checks) */
-        if (xQueueReceive(scp_evt_queue, &evt, pdMS_TO_TICKS(500)) != pdTRUE) {
-            /* Periodic: update INA240 current reading */
+        uint8_t evt = 0U;
+        if (xQueueReceive(scp_evt_queue, &evt, pdMS_TO_TICKS(INA240_POLL_INTERVAL_MS)) != pdTRUE) {
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             g_sys.pack_current_ma = ina240_read_current_ma();
             xSemaphoreGive(g_state_mutex);
             continue;
         }
 
-        /* ---- FAULT DETECTED ---- */
-        ESP_LOGW(TAG, "FAULT_N triggered — hardware has cut gate");
+        if (evt != SCP_EVT_FAULT) continue;
+
+        /* Hardware has already removed the gate. Record the firmware-side state. */
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.scp_state   = SCP_STATE_FAULT_DETECTED;
+        g_sys.scp_state = SCP_STATE_FAULT_DETECTED;
         g_sys.fault_active = true;
-        xSemaphoreGive(g_state_mutex);
-
-        /* ---- FAULT LATCH: capture peak current, log to Black Box ---- */
-        vTaskDelay(pdMS_TO_TICKS(10));  // allow INA240 to settle
-        int32_t peak_current = ina240_read_current_ma();
-        uint32_t pack_v      = g_sys.pack_voltage_mv;
-
-        ESP_LOGW(TAG, "Peak fault current: %d mA", peak_current);
-
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.scp_state    = SCP_STATE_FAULT_LATCH;
         g_sys.retry_count++;
-        xSemaphoreGive(g_state_mutex);
-
-        black_box_write_fault(FAULT_SCP_TRIP, peak_current, pack_v);
-        mqtt_publish_fault("SCP_TRIP", peak_current);
-
-        /* Check for permanent fault (3 in 60s) */
-        if (check_permanent_fault()) {
-            ESP_LOGE(TAG, "PERMANENT FAULT — 3 trips in 60s. Reset required.");
-            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.scp_state    = SCP_STATE_PERMANENT_FAULT;
-            g_sys.permanent_fault = true;
-            xSemaphoreGive(g_state_mutex);
-            black_box_write_fault(FAULT_SCP_PERMANENT, peak_current, pack_v);
-            mqtt_publish_fault("PERMANENT_FAULT", peak_current);
-            /* Blink LED — wait for reset or MQTT clear */
-            while (g_sys.permanent_fault) {
-                if (PIN_STATUS_LED != GPIO_NUM_NC) {
-                    gpio_set_level(PIN_STATUS_LED, 1);
-                    vTaskDelay(pdMS_TO_TICKS(200));
-                    gpio_set_level(PIN_STATUS_LED, 0);
-                    vTaskDelay(pdMS_TO_TICKS(200));
-                } else {
-                    vTaskDelay(pdMS_TO_TICKS(200));
-                }
-            }
-            /* MQTT reset_fault command cleared permanent_fault */
-            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.scp_state    = SCP_STATE_NORMAL;
-            g_sys.fault_active = false;
-            g_sys.retry_count  = 0;
-            trip_idx = 0;
-            xSemaphoreGive(g_state_mutex);
-            ESP_LOGI(TAG, "Permanent fault cleared — resuming");
-            continue;
-        }
-
-        /* ---- RECOVERY WAIT: 10 seconds, gate off, LED blinks red 5Hz ---- */
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.scp_state = SCP_STATE_RECOVERY_WAIT;
-        xSemaphoreGive(g_state_mutex);
-
-        xTaskCreate(led_blink_task_red, "led_red", 1024, NULL, 1, &led_task_handle);
-        mqtt_publish_recovery_eta(SCP_RECOVERY_WAIT_MS / 1000);
-        ESP_LOGI(TAG, "Recovery wait: 10 seconds...");
-        vTaskDelay(pdMS_TO_TICKS(SCP_RECOVERY_WAIT_MS));
-
-        /* Stop LED blink task */
-        if (led_task_handle) {
-            vTaskDelete(led_task_handle);
-            led_task_handle = NULL;
-            if (PIN_STATUS_LED != GPIO_NUM_NC) {
-                gpio_set_level(PIN_STATUS_LED, 0);
-            }
-        }
-
-        /* ---- RETRY PROBE: apply a limited 5% drive only during the probe ---- */
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.scp_state = SCP_STATE_RETRY_PROBE;
+        uint32_t retry_count = g_sys.retry_count;
+        uint32_t pack_v = g_sys.pack_voltage_mv;
         op_mode_t restore_mode = g_sys.op_mode;
-        uint32_t  restore_duty = g_sys.pwm_duty_pct;
+        uint32_t restore_duty = g_sys.pwm_duty_pct;
         xSemaphoreGive(g_state_mutex);
 
-        uint32_t probe_duty_pct = 5U;
-        if (restore_mode == MODE_PWM_50 && restore_duty > 5U) {
-            probe_duty_pct = 5U;
-        } else if (restore_mode == MODE_PWM_50 && restore_duty <= 5U) {
-            probe_duty_pct = restore_duty;
-        }
+        protection_set_fault(PROT_FAULT_SCP, false);
 
-        if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM_50) {
-            gate_enable_pwm(probe_duty_pct);
-        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+        int32_t trip_current = ina240_read_current_ma();
+        black_box_write_fault(FAULT_SCP_TRIP, trip_current, pack_v);
+        mqtt_publish_fault("SCP_TRIP", trip_current);
+        /* Drop duplicate edges generated by the same already-latched hardware fault.
+         * A genuine re-trip after a restored gate is queued again by the monitor below. */
+        xQueueReset(scp_evt_queue);
 
-        vTaskDelay(pdMS_TO_TICKS(100));
-        int32_t probe_current = ina240_read_current_ma();
-        uint32_t abs_probe_current = (probe_current < 0) ? (uint32_t)(-probe_current) : (uint32_t)probe_current;
-        uint32_t probe_threshold_ma = (g_sys.oc_ma > 0U) ? ((g_sys.oc_ma * SCP_PROBE_SHORTED_PCT) / 100U) : 2000U;
-
-        ESP_LOGI(TAG, "Retry probe: current %d mA, threshold %u mA, duty %u%%", probe_current, probe_threshold_ma, probe_duty_pct);
-
-        black_box_write_recovery_attempt(g_sys.retry_count, abs_probe_current);
-
-        if (abs_probe_current > probe_threshold_ma) {
-            /* Load still shorted — restore the safe OFF state and retry later. */
-            ESP_LOGW(TAG, "Load still shorted: current %d mA > %u mA", probe_current, probe_threshold_ma);
-            gate_disable();
-            mqtt_publish_fault("PROBE_SHORTED", probe_current);
-            xQueueSend(scp_evt_queue, &evt, 0);  // re-queue to keep recovery state machine alive
+        if (trip_window_reached()) {
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.scp_state = SCP_STATE_RECOVERY_WAIT;
-            xSemaphoreGive(g_state_mutex);
-            vTaskDelay(pdMS_TO_TICKS(SCP_RECOVERY_WAIT_MS));
-            continue;
-        }
-
-        /* MODE_OFF: gate stays off intentionally */
-
-        /* Monitor closely for 2 seconds. This is an explicit re-trip check rather
-         * than relying on a fresh FAULT_N falling edge after the signal is already low. */
-        bool re_trip = false;
-        for (int i = 0; i < 20; i++) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-            if (gpio_get_level(PIN_FAULT_N) == 0) {
-                re_trip = true;
-                break;
-            }
-        }
-
-        if (re_trip) {
-            ESP_LOGW(TAG, "Re-trip within 2s monitor window — forcing gate off");
-            gate_disable();
-            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.scp_state = SCP_STATE_FAULT_DETECTED;
+            g_sys.scp_state = SCP_STATE_PERMANENT_FAULT;
+            g_sys.permanent_fault = true;
             g_sys.fault_active = true;
             xSemaphoreGive(g_state_mutex);
-            xQueueSend(scp_evt_queue, &evt, 0);
+            protection_set_fault(PROT_FAULT_SCP, true);
+            gate_disable();
+            black_box_write_fault(FAULT_SCP_PERMANENT, trip_current, pack_v);
+            mqtt_publish_fault("PERMANENT_FAULT", trip_current);
+
+            /* Wait here until the MQTT reset command has proven the system safe. */
+            for (;;) {
+                xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+                bool permanent = g_sys.permanent_fault;
+                xSemaphoreGive(g_state_mutex);
+                if (!permanent) break;
+                vTaskDelay(pdMS_TO_TICKS(250));
+            }
             continue;
-        } else {
+        }
+
+        bool recovered = false;
+        for (;;) {
+            wait_recovery_interval();
+
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-            g_sys.scp_state    = SCP_STATE_NORMAL;
-            g_sys.fault_active = false;
+            g_sys.scp_state = SCP_STATE_RETRY_PROBE;
+            restore_mode = g_sys.op_mode;
+            restore_duty = g_sys.pwm_duty_pct;
             xSemaphoreGive(g_state_mutex);
+
+            /* Probe only if an output had previously been requested. */
+            if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM_50) {
+                gate_enable_pwm(5U);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                int32_t probe_current = ina240_read_current_ma();
+                uint32_t abs_probe = (probe_current < 0) ? (uint32_t)(-probe_current) : (uint32_t)probe_current;
+                uint32_t oc_limit = g_sys.oc_ma;
+                uint32_t probe_threshold = (oc_limit > 0U) ? (oc_limit * SCP_PROBE_SHORTED_PCT) / 100U : 2000U;
+                if (probe_threshold < 1000U) probe_threshold = 1000U;
+
+                black_box_write_recovery_attempt(retry_count, abs_probe);
+
+                if (abs_probe > probe_threshold || gpio_get_level(PIN_FAULT_N) == 0) {
+                    gate_disable();
+                    xQueueReset(scp_evt_queue);
+                    mqtt_publish_fault("PROBE_SHORTED", probe_current);
+                    ESP_LOGW(TAG, "Recovery probe failed: %d mA", probe_current);
+                    continue;
+                }
+            } else {
+                gate_disable();
+            }
+
+            /* Do not restore output if another protection source remains active. */
+            if (!ltc6811_protection_conditions_clear()) {
+                gate_disable();
+                protection_clear_fault(PROT_FAULT_SCP);
+                xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+                g_sys.scp_state = SCP_STATE_NORMAL;
+                g_sys.retry_count = 0U;
+                xSemaphoreGive(g_state_mutex);
+                mqtt_publish_fault("SCP_RECOVERY_BLOCKED", 0);
+                recovered = true;
+                break;
+            }
 
             if (restore_mode == MODE_FULL_POWER) {
                 gate_enable_full();
@@ -303,46 +242,87 @@ void scp_recovery_task(void *arg)
                 gate_disable();
             }
 
-            if (PIN_STATUS_LED != GPIO_NUM_NC) {
-                gpio_set_level(PIN_STATUS_LED, 1);  // solid on = OK
+            bool retrip = false;
+            for (uint32_t ms = 0; ms < SCP_MONITOR_AFTER_RESTORE_MS; ms += 100U) {
+                uint8_t pending = 0U;
+                if (xQueuePeek(scp_evt_queue, &pending, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    retrip = true;
+                    break;
+                }
+                if (gpio_get_level(PIN_FAULT_N) == 0) {
+                    uint8_t evt = SCP_EVT_FAULT;
+                    xQueueSend(scp_evt_queue, &evt, 0);
+                    retrip = true;
+                    break;
+                }
             }
-            ESP_LOGI(TAG, "Gate restored — NORMAL (mode=%d duty=%u%%)", restore_mode, restore_duty);
+            if (retrip) {
+                gate_disable();
+                xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+                g_sys.scp_state = SCP_STATE_FAULT_LATCH;
+                xSemaphoreGive(g_state_mutex);
+                recovered = true;
+                break;
+            }
+
+            protection_clear_fault(PROT_FAULT_SCP);
+            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+            g_sys.scp_state = SCP_STATE_NORMAL;
+            g_sys.fault_active = (g_sys.protection_fault_mask != 0U) || g_sys.permanent_fault;
+            g_sys.retry_count = 0U;
+            xSemaphoreGive(g_state_mutex);
             mqtt_publish_fault("RECOVERED", 0);
+            recovered = true;
+            break;
         }
+
+        (void)recovered;
     }
 }
 
-/* ----------------------------------------------------------------
- *  Apply the current persisted gate mode after an SCP recovery state change.
- * ---------------------------------------------------------------- */
 void scp_recovery_enable_gate(void)
 {
+    if (!ltc6811_protection_conditions_clear()) {
+        gate_disable();
+        return;
+    }
+
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     op_mode_t mode = g_sys.op_mode;
-    uint32_t  duty = g_sys.pwm_duty_pct;
+    uint32_t duty = g_sys.pwm_duty_pct;
     xSemaphoreGive(g_state_mutex);
 
-    if (mode == MODE_FULL_POWER) {
-        gate_enable_full();
-    } else if (mode == MODE_PWM_50) {
-        gate_enable_pwm(duty);
-    }
-    /* Default mode is OFF — the gate remains disabled until software chooses a valid mode. */
+    if (mode == MODE_FULL_POWER) gate_enable_full();
+    else if (mode == MODE_PWM_50) gate_enable_pwm(duty);
+    else gate_disable();
 }
 
-/* ----------------------------------------------------------------
- *  Called by MQTT reset_fault command handler
- * ---------------------------------------------------------------- */
 void scp_clear_permanent_fault(void)
 {
+    if (!ltc6811_protection_conditions_clear()) {
+        ESP_LOGW(TAG, "Reset rejected: active protection condition remains");
+        mqtt_publish_fault("RESET_REJECTED_ACTIVE_FAULT", 0);
+        return;
+    }
+
+    ltc6811_reset_fault_latches();
+    protection_clear_fault(PROT_FAULT_SCP |
+                           PROT_FAULT_TEMP_SENSOR |
+                           PROT_FAULT_TEMP_SHUTDOWN |
+                           PROT_FAULT_CELL_OV |
+                           PROT_FAULT_CELL_UV |
+                           PROT_FAULT_OVERCURRENT |
+                           PROT_FAULT_PACK_OV);
+
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.permanent_fault = false;
-    g_sys.fault_active     = false;
-    g_sys.scp_state       = SCP_STATE_NORMAL;
-    g_sys.gate_state      = GATE_OFF;
-    g_sys.fault_count     = 0;
+    g_sys.fault_active = false;
+    g_sys.scp_state = SCP_STATE_NORMAL;
+    g_sys.retry_count = 0U;
+    trip_count_total = 0U;
     xSemaphoreGive(g_state_mutex);
-    ltc6811_reset_fault_latches();
+
     gate_disable();
-    ESP_LOGI(TAG, "Permanent fault cleared by MQTT command");
+    ESP_LOGI(TAG, "Permanent/protection faults cleared after safety recheck");
+    mqtt_publish_fault("FAULT_RESET", 0);
 }

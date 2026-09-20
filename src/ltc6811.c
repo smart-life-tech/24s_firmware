@@ -11,6 +11,7 @@
 #include "hardware_init.h"
 #include "black_box.h"
 #include "mqtt_telemetry.h"
+#include "ina240.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "driver/spi_master.h"
@@ -27,6 +28,8 @@ static bool g_last_cell_ov[CELL_COUNT] = {false};
 static bool g_last_cell_uv[CELL_COUNT] = {false};
 static bool g_last_oc_fault = false;
 static bool g_last_pack_ov_fault = false;
+static bool g_last_temp_invalid[NTC_COUNT] = {false};
+static bool g_last_temp_warn[NTC_COUNT] = {false};
 
 /* ----------------------------------------------------------------
  *  PEC (15-bit CRC) — LTC6811-1 reference implementation
@@ -184,8 +187,6 @@ static void parse_voltage_group(const uint8_t *reg, uint16_t *cell_a,
 /* ----------------------------------------------------------------
  *  Read all 24 cell voltages
  * ---------------------------------------------------------------- */
-static int pec_fail_count[2] = {0, 0};
-
 esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out)
 {
     ltc_wake();
@@ -365,45 +366,49 @@ static void balancing_update(const uint16_t *cells)
     }
 
     uint32_t total_mv = 0U;
-    for (int i = 0; i < CELL_COUNT; i++) {
-        total_mv += cells[i];
-    }
+    for (int i = 0; i < CELL_COUNT; i++) total_mv += cells[i];
     uint32_t avg_mv = total_mv / CELL_COUNT;
     uint32_t bal_delta = g_sys.bal_delta_mv ? g_sys.bal_delta_mv : BAL_DELTA_MV;
 
-    uint16_t mask_u19 = g_balance_mask_u19;
-    uint16_t mask_u23 = g_balance_mask_u23;
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    bool inhibit_balancing = g_sys.fault_active || g_sys.permanent_fault;
+    xSemaphoreGive(g_state_mutex);
+
+    uint16_t old_u19 = g_balance_mask_u19;
+    uint16_t old_u23 = g_balance_mask_u23;
+    uint16_t mask_u19 = old_u19;
+    uint16_t mask_u23 = old_u23;
 
     for (int i = 0; i < CELL_COUNT; i++) {
         bool currently_on = (i < 12) ? ((mask_u19 >> i) & 1U) : ((mask_u23 >> (i - 12)) & 1U);
         bool turn_on = cells[i] > (avg_mv + bal_delta);
         bool turn_off = cells[i] < (avg_mv + BAL_STOP_MV);
-        bool enable = currently_on ? !turn_off : turn_on;
+        bool enable = inhibit_balancing ? false : (currently_on ? !turn_off : turn_on);
 
         if (i < 12) {
-            if (enable) {
-                mask_u19 |= (1U << i);
-            } else {
-                mask_u19 &= ~(1U << i);
-            }
+            if (enable) mask_u19 |= (uint16_t)(1U << i);
+            else        mask_u19 &= (uint16_t)~(1U << i);
         } else {
             int n = i - 12;
-            if (enable) {
-                mask_u23 |= (1U << n);
-            } else {
-                mask_u23 &= ~(1U << n);
-            }
+            if (enable) mask_u23 |= (uint16_t)(1U << n);
+            else        mask_u23 &= (uint16_t)~(1U << n);
         }
-
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.cell_balancing[i] = enable;
-        xSemaphoreGive(g_state_mutex);
     }
 
     bool force_refresh = (xTaskGetTickCount() - g_last_balance_refresh_tick) >= pdMS_TO_TICKS(1000);
+    bool changed = (mask_u19 != old_u19) || (mask_u23 != old_u23);
     esp_err_t ret = ltc6811_set_balance_masks(mask_u19, mask_u23, force_refresh);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Balance config write failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    if (changed || force_refresh) {
+        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        for (int i = 0; i < CELL_COUNT; i++) {
+            g_sys.cell_balancing[i] = (i < 12) ? ((mask_u19 >> i) & 1U) : ((mask_u23 >> (i - 12)) & 1U);
+        }
+        xSemaphoreGive(g_state_mutex);
     }
 }
 
@@ -455,78 +460,106 @@ void ltc6811_reset_fault_latches(void)
 
 static void check_thresholds(const uint16_t *cells)
 {
+    uint32_t ov;
+    uint32_t uv;
+    uint32_t oc_ma;
+    int32_t pack_current_ma;
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    uint32_t ov = g_sys.ov_mv;
-    uint32_t uv = g_sys.uv_mv;
-    uint32_t oc_ma = g_sys.oc_ma;
-    int32_t pack_current_ma = g_sys.pack_current_ma;
-    cell_chemistry_t chemistry = g_sys.chemistry;
+    ov = g_sys.ov_mv;
+    uv = g_sys.uv_mv;
+    oc_ma = g_sys.oc_ma;
+    pack_current_ma = g_sys.pack_current_ma;
     xSemaphoreGive(g_state_mutex);
 
-    if (chemistry == CHEM_SODIUM_ION) {
-        ov = OV_MV_NA_ION;
-        uv = UV_MV_NA_ION;
-    } else {
-        ov = OV_MV_LIFEPO4;
-        uv = UV_MV_LIFEPO4;
-    }
+    uint32_t pack_total_mv = 0U;
+    bool any_ov = false;
+    bool any_uv = false;
 
-    uint32_t pack_total_mv = 0;
-    bool cell_fault = false;
     for (int i = 0; i < CELL_COUNT; i++) {
         pack_total_mv += cells[i];
 
         bool ov_now = (cells[i] >= ov);
         bool uv_now = (cells[i] <= uv);
+        any_ov |= ov_now;
+        any_uv |= uv_now;
 
         if (ov_now && !g_last_cell_ov[i]) {
-            cell_fault = true;
-            g_sys.fault_active = true;
-            ESP_LOGW(TAG, "Cell %d OV: %d mV", i+1, cells[i]);
-            black_box_write_cell_threshold(FAULT_CELL_OV, i, cells[i]);
+            protection_set_fault(PROT_FAULT_CELL_OV, false);
+            gate_hold_off();
+            ESP_LOGW(TAG, "Cell %d OV: %d mV", i + 1, cells[i]);
+            black_box_write_cell_threshold(FAULT_CELL_OV, (uint8_t)i, cells[i]);
             mqtt_publish_fault("CELL_OV", 0);
         }
-        g_last_cell_ov[i] = ov_now;
-
         if (uv_now && !g_last_cell_uv[i]) {
-            cell_fault = true;
-            g_sys.fault_active = true;
-            ESP_LOGW(TAG, "Cell %d UV: %d mV", i+1, cells[i]);
-            black_box_write_cell_threshold(FAULT_CELL_UV, i, cells[i]);
+            protection_set_fault(PROT_FAULT_CELL_UV, false);
+            gate_hold_off();
+            ESP_LOGW(TAG, "Cell %d UV: %d mV", i + 1, cells[i]);
+            black_box_write_cell_threshold(FAULT_CELL_UV, (uint8_t)i, cells[i]);
             mqtt_publish_fault("CELL_UV", 0);
         }
+
+        g_last_cell_ov[i] = ov_now;
         g_last_cell_uv[i] = uv_now;
-
-        if (!ov_now && !uv_now) {
-            g_last_cell_ov[i] = false;
-            g_last_cell_uv[i] = false;
-        }
     }
 
-    if (cell_fault) {
-        gate_hold_off();
-    }
+    if (!any_ov) protection_clear_fault(PROT_FAULT_CELL_OV);
+    if (!any_uv) protection_clear_fault(PROT_FAULT_CELL_UV);
 
     bool oc_now = (oc_ma > 0U && pack_current_ma > (int32_t)oc_ma);
     if (oc_now && !g_last_oc_fault) {
-        g_sys.fault_active = true;
+        protection_set_fault(PROT_FAULT_OVERCURRENT, false);
         gate_hold_off();
         ESP_LOGE(TAG, "Over-current trip: %ld mA > %u mA", (long)pack_current_ma, oc_ma);
-        black_box_write_fault(FAULT_SCP_TRIP, pack_current_ma, pack_total_mv);
+        black_box_write_fault(FAULT_OVERCURRENT, pack_current_ma, pack_total_mv);
         mqtt_publish_fault("OC_LIMIT", pack_current_ma);
     }
+    if (!oc_now) protection_clear_fault(PROT_FAULT_OVERCURRENT);
     g_last_oc_fault = oc_now;
 
     bool pack_ov_now = (pack_total_mv >= PACK_CUTOFF_MV);
     if (pack_ov_now && !g_last_pack_ov_fault) {
-        g_sys.fault_active = true;
-        ESP_LOGE(TAG, "Pack cutoff reached: %u mV >= %u mV", pack_total_mv, PACK_CUTOFF_MV);
+        protection_set_fault(PROT_FAULT_PACK_OV, false);
         gate_hold_off();
+        ESP_LOGE(TAG, "Pack cutoff reached: %u mV >= %u mV", pack_total_mv, PACK_CUTOFF_MV);
         black_box_write_fault(FAULT_PACK_OV, 0, pack_total_mv);
         mqtt_publish_fault("PACK_OV", 0);
     }
+    if (!pack_ov_now) protection_clear_fault(PROT_FAULT_PACK_OV);
     g_last_pack_ov_fault = pack_ov_now;
+}
+
+bool ltc6811_protection_conditions_clear(void)
+{
+    uint16_t cells[CELL_COUNT];
+    uint32_t ov, uv, oc_ma, pack_v;
+
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    memcpy(cells, g_sys.cell_mv, sizeof(cells));
+    ov = g_sys.ov_mv;
+    uv = g_sys.uv_mv;
+    oc_ma = g_sys.oc_ma;
+    pack_v = g_sys.pack_voltage_mv;
+    xSemaphoreGive(g_state_mutex);
+
+    if (gpio_get_level(PIN_FAULT_N) == 0) return false;
+    if (pack_v >= PACK_CUTOFF_MV) return false;
+
+    int32_t current_ma = ina240_read_current_ma();
+    if (oc_ma > 0U && current_ma > (int32_t)oc_ma) return false;
+
+    for (int i = 0; i < CELL_COUNT; i++) {
+        if (cells[i] >= ov || cells[i] <= uv) return false;
+    }
+
+    /* Re-sample every NTC so reset cannot clear a latched sensor fault using a
+     * stale 0°C placeholder from an earlier invalid reading. */
+    for (int i = 0; i < NTC_COUNT; i++) {
+        float temp_c = ntc_read_temperature(i);
+        if (!isfinite(temp_c) || temp_c >= TEMP_WARN_C) return false;
+    }
+
+    return true;
 }
 
 /* ----------------------------------------------------------------
@@ -534,6 +567,7 @@ static void check_thresholds(const uint16_t *cells)
  * ---------------------------------------------------------------- */
 void cell_monitor_task(void *arg)
 {
+    (void)arg;
     ESP_LOGI(TAG, "Cell monitor task running");
     uint32_t temp_tick = 0;
 
@@ -560,51 +594,68 @@ void cell_monitor_task(void *arg)
         temp_tick += CELL_SCAN_INTERVAL_MS;
         if (temp_tick >= TEMP_SCAN_INTERVAL_MS) {
             temp_tick = 0;
-            float temps[4];
+            float temps[NTC_COUNT];
             float sum = 0.0f;
-            int shutdown_sensor = -1;
-            int warn_sensor = -1;
-            for (int s = 0; s < 4; s++) {
+            bool any_invalid = false;
+            bool any_shutdown = false;
+
+            for (int s = 0; s < NTC_COUNT; s++) {
                 temps[s] = ntc_read_temperature(s);
+
                 if (!isfinite(temps[s])) {
-                    ESP_LOGE(TAG, "NTC sensor %d invalid: open/short or ADC error", s + 1);
-                    black_box_write_temp_alert((uint8_t)s, 0.0f);
-                    mqtt_publish_fault("TEMP_SENSOR_FAIL", 0);
+                    any_invalid = true;
+                    if (!g_last_temp_invalid[s]) {
+                        ESP_LOGE(TAG, "NTC sensor %d invalid: open/short or ADC error", s + 1);
+                        black_box_write_temp_sensor_fault((uint8_t)s);
+                        mqtt_publish_fault("TEMP_SENSOR_FAIL", 0);
+                    }
+                    g_last_temp_invalid[s] = true;
                     temps[s] = 0.0f;
+                } else {
+                    g_last_temp_invalid[s] = false;
                 }
+
+                bool warn_now = (temps[s] >= TEMP_WARN_C);
+                bool shutdown_now = (temps[s] >= TEMP_SHUTDOWN_C);
+                any_shutdown |= shutdown_now;
+
+                if (warn_now && !g_last_temp_warn[s] && !shutdown_now) {
+                    ESP_LOGW(TAG, "Temp warning: sensor %d at %.1f°C", s + 1, temps[s]);
+                    black_box_write_temp_alert((uint8_t)s, temps[s]);
+                    mqtt_publish_fault("TEMP_WARN", 0);
+                }
+                g_last_temp_warn[s] = warn_now;
                 sum += temps[s];
-                if (temps[s] >= TEMP_SHUTDOWN_C && shutdown_sensor < 0) {
-                    shutdown_sensor = s;
-                }
-                if (temps[s] >= TEMP_WARN_C && warn_sensor < 0) {
-                    warn_sensor = s;
-                }
             }
-            float avg = (sum / 4.0f);
+
+            float avg = sum / (float)NTC_COUNT;
 
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             g_sys.temp_avg_c = avg;
             memcpy(g_sys.temp_sensors_c, temps, sizeof(temps));
             xSemaphoreGive(g_state_mutex);
 
-            if (shutdown_sensor >= 0) {
-                float shutdown_temp = temps[shutdown_sensor];
-                ESP_LOGE(TAG, "TEMP SHUTDOWN: sensor %d at %.1f°C", shutdown_sensor + 1, shutdown_temp);
-                black_box_write_temp_alert((uint8_t)shutdown_sensor, shutdown_temp);
-                mqtt_publish_fault("TEMP_SHUTDOWN", 0);
-                xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-                g_sys.scp_state = SCP_STATE_PERMANENT_FAULT;
-                g_sys.permanent_fault = true;
-                g_sys.fault_active = true;
-                g_sys.gate_state = GATE_OFF;
-                xSemaphoreGive(g_state_mutex);
+            if (any_invalid) {
+                protection_set_fault(PROT_FAULT_TEMP_SENSOR, true);
                 gate_hold_off();
-            } else if (warn_sensor >= 0) {
-                float warn_temp = temps[warn_sensor];
-                ESP_LOGW(TAG, "Temp warning: sensor %d at %.1f°C", warn_sensor + 1, warn_temp);
-                black_box_write_temp_alert((uint8_t)warn_sensor, warn_temp);
-                mqtt_publish_fault("TEMP_WARN", 0);
+            }
+
+            if (any_shutdown) {
+                bool was_latched = protection_has_fault(PROT_FAULT_TEMP_SHUTDOWN);
+                protection_set_fault(PROT_FAULT_TEMP_SHUTDOWN, true);
+                gate_hold_off();
+                if (!was_latched) {
+                    for (int s = 0; s < NTC_COUNT; s++) {
+                        if (temps[s] >= TEMP_SHUTDOWN_C) {
+                            ESP_LOGE(TAG, "TEMP SHUTDOWN: sensor %d at %.1f°C", s + 1, temps[s]);
+                            black_box_write_temp_alert((uint8_t)s, temps[s]);
+                            mqtt_publish_fault("TEMP_SHUTDOWN", 0);
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
+
 }

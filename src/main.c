@@ -51,7 +51,14 @@ static esp_err_t run_boot_sequence(void)
     ESP_LOGI(TAG, "=== 24S Smart Hub Boot Sequence ===");
 
     ESP_LOGI(TAG, "[1/5] Peripheral init...");
-    ESP_ERROR_CHECK(hardware_init());
+    esp_err_t hw_ret = hardware_init();
+    if (hw_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Hardware initialization failed: %s", esp_err_to_name(hw_ret));
+        g_sys.fault_active = true;
+        g_sys.permanent_fault = true;
+        gate_hold_off();
+        return hw_ret;
+    }
     gate_hold_off();
     ESP_LOGI(TAG, "      GPIO / LEDC / SPI / ADC OK");
 
@@ -60,8 +67,16 @@ static esp_err_t run_boot_sequence(void)
     if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES ||
         nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "NVS needs erase — reflashing");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ESP_ERROR_CHECK(nvs_flash_init());
+        nvs_ret = nvs_flash_erase();
+        if (nvs_ret != ESP_OK) {
+            ESP_LOGE(TAG, "NVS erase failed: %s", esp_err_to_name(nvs_ret));
+            return nvs_ret;
+        }
+        nvs_ret = nvs_flash_init();
+        if (nvs_ret != ESP_OK) {
+            ESP_LOGE(TAG, "NVS re-init failed: %s", esp_err_to_name(nvs_ret));
+            return nvs_ret;
+        }
     }
     config_load_from_nvs();
     ESP_LOGI(TAG, "      NVS OK");
@@ -100,11 +115,12 @@ void app_main(void)
     g_state_mutex = xSemaphoreCreateMutex();
 
     if (run_boot_sequence() != ESP_OK) {
-        wifi_manager_start();
-        xTaskCreate(cell_monitor_task,  "cell_mon",  4096, NULL, 5, NULL);
-        xTaskCreate(black_box_task,     "blackbox",  4096, NULL, 4, NULL);
+        if (wifi_manager_start() != ESP_OK) {
+            ESP_LOGW(TAG, "Wi-Fi initialization unavailable in safe-standby");
+        }
         xTaskCreate(wifi_manager_task,  "wifi",      4096, NULL, 3, NULL);
         xTaskCreate(mqtt_fault_task,    "mqtt_flt",  4096, NULL, 3, NULL);
+        xTaskCreate(black_box_task,     "blackbox",  4096, NULL, 4, NULL);
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 

@@ -149,6 +149,7 @@ typedef struct {
     uint32_t          retry_count;
     bool              pwm_remote_override;
     bool              fault_active;
+    uint32_t          protection_fault_mask;
     uint32_t          ov_mv;
     uint32_t          uv_mv;
     uint32_t          oc_ma;
@@ -163,15 +164,31 @@ typedef enum {
     FAULT_SCP_TRIP          = 0x0020,
     FAULT_SCP_RECOVERY      = 0x0021,
     FAULT_SCP_PERMANENT     = 0x0022,
+    FAULT_OVERCURRENT        = 0x0023,
     FAULT_CELL_OV           = 0x0030,
     FAULT_CELL_UV           = 0x0031,
     FAULT_PACK_OV           = 0x0032,
     FAULT_TEMP_WARN         = 0x0040,
     FAULT_TEMP_SHUTDOWN     = 0x0041,
+    FAULT_TEMP_SENSOR_FAIL  = 0x0042,
 } fault_type_t;
+
+/* Internal protection-state bits. These are deliberately separate from the
+ * PWA-visible fault_type values so multiple simultaneous conditions can be
+ * tracked without one recovery path clearing another protection source. */
+#define PROT_FAULT_CELL_OV        (1UL << 0)
+#define PROT_FAULT_CELL_UV        (1UL << 1)
+#define PROT_FAULT_OVERCURRENT    (1UL << 2)
+#define PROT_FAULT_PACK_OV        (1UL << 3)
+#define PROT_FAULT_TEMP_SENSOR    (1UL << 4)
+#define PROT_FAULT_TEMP_SHUTDOWN  (1UL << 5)
+#define PROT_FAULT_SCP            (1UL << 6)
 
 extern system_state_t g_sys;
 extern SemaphoreHandle_t g_state_mutex;
 
 void config_load_from_nvs(void);
 void config_save_to_nvs(void);
+void protection_set_fault(uint32_t mask, bool latch_permanent);
+void protection_clear_fault(uint32_t mask);
+bool protection_has_fault(uint32_t mask);

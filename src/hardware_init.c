@@ -186,8 +186,21 @@ void gate_hold_off(void)
 
 uint32_t adc_read_mv(adc1_channel_t channel)
 {
-    uint32_t raw = 0;
-    for (int i = 0; i < 10; i++) raw += adc1_get_raw(channel);
-    raw /= 10;
-    return esp_adc_cal_raw_to_voltage(raw, &g_adc_chars);
+    uint32_t raw_sum = 0U;
+    uint32_t valid_samples = 0U;
+
+    for (int i = 0; i < 10; i++) {
+        int raw = adc1_get_raw(channel);
+        if (raw >= 0) {
+            raw_sum += (uint32_t)raw;
+            valid_samples++;
+        }
+    }
+
+    if (valid_samples == 0U) {
+        return 0U;
+    }
+
+    uint32_t raw_avg = raw_sum / valid_samples;
+    return esp_adc_cal_raw_to_voltage(raw_avg, &g_adc_chars);
 }

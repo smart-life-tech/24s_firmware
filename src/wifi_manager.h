@@ -1,4 +1,5 @@
 #pragma once
+#include "esp_err.h"
 
-void wifi_manager_start(void);
+esp_err_t wifi_manager_start(void);
 void wifi_manager_task(void *arg);

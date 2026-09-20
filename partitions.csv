@@ -4,9 +4,9 @@
 nvs,      data, nvs,      0x9000,   0x6000,
 phy_init, data, phy,      0xF000,   0x1000,
 factory,  app,  factory,  0x10000,  0x180000,
-black_box,data, 0xFF,     0x190000, 0x80000,
-# 512KB for Black Box = 0x80000 = 8192 sectors
-# At 64 bytes/record: 512*1024/64 = 8192 possible records
-# We cap at 500 for reliable ring-buffer management
+black_box,data, 0x40,     0x190000, 0x80000,
+# 512 KiB Black Box partition. The firmware uses two 4 KiB header sectors
+# plus 8 record sectors (32 KiB) for the 500-record circular log.
+# Remaining partition space is reserved for future log expansion.
 storage,  data, nvs,      0x210000, 0x6000,
 # Remaining space for OTA or future use

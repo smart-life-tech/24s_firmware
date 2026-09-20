@@ -105,6 +105,7 @@ void pwm_apply_pot(void)
     
     if (xSemaphoreTake(g_state_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         g_sys.pwm_duty_pct = duty;
+        g_sys.gate_state = (duty == 0U) ? GATE_OFF : GATE_PWM;
         xSemaphoreGive(g_state_mutex);
     } else {
         ESP_LOGW(TAG, "pwm_apply_pot: state mutex timeout � "
