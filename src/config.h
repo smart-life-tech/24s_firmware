@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "driver/adc.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 /* ================================================================
  *  GPIO pin map (ESP32-S2)
@@ -29,8 +30,8 @@
 #define MASTER_SWITCH_GPIO  GPIO_NUM_NC
 
 #define POT_OVERSAMPLE_N    32
-#define POT_DEADBAND_LOW    82
-#define POT_DEADBAND_HIGH   4013
+#define POT_DEADBAND_LOW    410U
+#define POT_DEADBAND_HIGH   7800U
 #define POT_POLL_INTERVAL_MS 50
 
 /* INA240 current-sense ADC */

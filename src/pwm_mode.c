@@ -1,8 +1,8 @@
 /**
- * pwm_mode.c � LEDC PWM helpers
+ * pwm_mode.c — LEDC PWM helpers
  *
  * The INA240A1D has built-in enhanced PWM rejection rated to 100kHz.
- * Our 20kHz target is well within spec � no external blanking needed.
+ * Our 20kHz target is well within spec and does not require external blanking.
  * TLV3501 OCP threshold remains valid during PWM switching.
  */
 
@@ -23,8 +23,7 @@ extern esp_adc_cal_characteristics_t g_adc_chars;
 
 /**
  * Set duty cycle 0-100%.
- * Uses 13-bit LEDC timer: max counts = 8191.
- * 50% = 4096 counts (default PWM mode).
+ * Uses the ESP32-S2 LEDC 11-bit timer: max counts = 2047.
  */
 void pwm_set_duty(uint32_t duty_pct)
 {

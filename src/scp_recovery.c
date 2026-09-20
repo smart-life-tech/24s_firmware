@@ -15,6 +15,7 @@
 #include "scp_recovery.h"
 #include "config.h"
 #include "hardware_init.h"
+#include "ltc6811.h"
 #include "black_box.h"
 #include "mqtt_telemetry.h"
 #include "ina240.h"
@@ -61,7 +62,7 @@ static void gate_enable_full(void)
 
 static void gate_enable_pwm(uint32_t duty_pct)
 {
-    uint32_t duty = (duty_pct * ((1 << 13) - 1)) / 100;
+    uint32_t duty = (duty_pct * LEDC_DUTY_MAX) / 100UL;
     ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty);
     ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
@@ -128,6 +129,12 @@ void scp_recovery_task(void *arg)
 
     /* Register ISR for FAULT_N falling edge */
     gpio_isr_handler_add(PIN_FAULT_N, fault_n_isr_handler, NULL);
+
+    if (gpio_get_level(PIN_FAULT_N) == 0) {
+        uint8_t evt = 1;
+        xQueueSend(scp_evt_queue, &evt, 0);
+        ESP_LOGW(TAG, "FAULT_N already low at boot; recovery task queued immediate retry");
+    }
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.scp_state = SCP_STATE_NORMAL;
@@ -335,6 +342,7 @@ void scp_clear_permanent_fault(void)
     g_sys.gate_state      = GATE_OFF;
     g_sys.fault_count     = 0;
     xSemaphoreGive(g_state_mutex);
-    gpio_set_level(PIN_GATE_CTRL, 0);
+    ltc6811_reset_fault_latches();
+    gate_disable();
     ESP_LOGI(TAG, "Permanent fault cleared by MQTT command");
 }

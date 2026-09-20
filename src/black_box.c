@@ -1,7 +1,9 @@
 /**
  * black_box.c — Offline Data Logger (Section 10)
  *
- * Writes to a 512KB partition formatted as a FIFO ring buffer.
+ * Writes to a fixed-size flash partition using a bounded record log with an
+ * explicit full-buffer reset policy. This avoids unsafe partial rewrites while
+ * preserving the PWA-compatible black-box export format.
  * Fixed 64-byte records. Max 500 records (~8 hours at 60s intervals).
  * Runs from boot — no Wi-Fi required.
  * On MQTT reconnect, publishes each buffered record as one JSON object to

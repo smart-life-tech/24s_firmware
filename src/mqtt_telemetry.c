@@ -29,6 +29,7 @@
 #include "freertos/event_groups.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <time.h>
 
 static const char *TAG = "MQTT";
@@ -134,8 +135,12 @@ void mqtt_handle_command(const char *topic, int topic_len,
     else if (strstr(topic_str, "cmd/pwm")) {
         cJSON *duty = cJSON_GetObjectItem(json, "duty");
         if (cJSON_IsNumber(duty)) {
-            uint32_t d = (uint32_t)duty->valuedouble;
-            third_wire_set_pwm_duty(d);
+            double d = duty->valuedouble;
+            if (!isfinite(d) || d < 0.0 || d > 100.0) {
+                ESP_LOGW(TAG, "Ignoring invalid PWM duty %f", d);
+            } else {
+                third_wire_set_pwm_duty((uint32_t)d);
+            }
         }
     }
     /* hub/{id}/cmd/reset_fault */
@@ -152,14 +157,22 @@ void mqtt_handle_command(const char *topic, int topic_len,
         cJSON *uv  = cJSON_GetObjectItem(json, "uv_mv");
         cJSON *oc  = cJSON_GetObjectItem(json, "oc_ma");
         cJSON *bal = cJSON_GetObjectItem(json, "bal_delta_mv");
+        cJSON *chem = cJSON_GetObjectItem(json, "chemistry");
         if (cJSON_IsNumber(ov))  g_sys.ov_mv        = (uint32_t)ov->valuedouble;
         if (cJSON_IsNumber(uv))  g_sys.uv_mv        = (uint32_t)uv->valuedouble;
         if (cJSON_IsNumber(oc))  g_sys.oc_ma        = (uint32_t)oc->valuedouble;
         if (cJSON_IsNumber(bal)) g_sys.bal_delta_mv = (uint32_t)bal->valuedouble;
+        if (cJSON_IsString(chem)) {
+            if (strcmp(chem->valuestring, "NA") == 0 || strcmp(chem->valuestring, "NA_ION") == 0 || strcmp(chem->valuestring, "sodium") == 0) {
+                g_sys.chemistry = CHEM_SODIUM_ION;
+            } else if (strcmp(chem->valuestring, "LFP") == 0 || strcmp(chem->valuestring, "LIFEPO4") == 0 || strcmp(chem->valuestring, "lifepo4") == 0) {
+                g_sys.chemistry = CHEM_LIFEPO4;
+            }
+        }
         xSemaphoreGive(g_state_mutex);
         config_save_to_nvs();
-        ESP_LOGI(TAG, "Config updated: OV=%d UV=%d OC=%d BAL=%d",
-                 g_sys.ov_mv, g_sys.uv_mv, g_sys.oc_ma, g_sys.bal_delta_mv);
+        ESP_LOGI(TAG, "Config updated: OV=%d UV=%d OC=%d BAL=%d CHEM=%d",
+                 g_sys.ov_mv, g_sys.uv_mv, g_sys.oc_ma, g_sys.bal_delta_mv, g_sys.chemistry);
     }
 
     cJSON_Delete(json);
@@ -178,8 +191,11 @@ static void publish_telemetry(void)
     xSemaphoreGive(g_state_mutex);
 
     uint32_t soc_10 = 0U;
-    if (PACK_CUTOFF_MV > 0U) {
-        soc_10 = (snap.pack_voltage_mv * 1000U) / PACK_CUTOFF_MV;
+    uint32_t chemistry_scale_mv = (snap.chemistry == CHEM_SODIUM_ION) ?
+                                  (OV_MV_NA_ION * CELL_COUNT) :
+                                  (OV_MV_LIFEPO4 * CELL_COUNT);
+    if (chemistry_scale_mv > 0U) {
+        soc_10 = (snap.pack_voltage_mv * 1000U) / chemistry_scale_mv;
         if (soc_10 > 1000U) soc_10 = 1000U;
         snap.soc_percent_x10 = soc_10;
     }

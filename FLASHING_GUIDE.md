@@ -194,8 +194,8 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 │   ├── ltc6811.c           ← LTC6811 isoSPI driver + cell monitoring task
 │   ├── scp_recovery.c      ← Hardware SCP + recovery state machine
 │   ├── third_wire.c        ← GPIO4 gate/PWM control path
-│   ├── pwm_mode.c          ← LEDC PWM helpers (20kHz, 13-bit)
-│   ├── black_box.c         ← Offline ring-buffer logger
+│   ├── pwm_mode.c          ← LEDC PWM helpers (20kHz, 11-bit)
+│   ├── black_box.c         ← Offline bounded logger with explicit full-buffer reset policy
 │   ├── mqtt_telemetry.c    ← Bidirectional MQTT JSON telemetry
 │   ├── subsystems.c        ← INA240, NVS, overall state handling
 │   └── *.h                 ← Interface declarations for each module
@@ -226,7 +226,7 @@ platformio device monitor
 |---|---|---|
 | M2A | Boot, SCP recovery, GPIO4 gate/PWM path, LTC6811 cell balancing | ✅ Implemented |
 | M2B | LEDC PWM 20kHz, NTC telemetry, ESP-IDF project packaging | ✅ Implemented |
-| M2C | MQTT JSON telemetry, Black Box ring buffer, Wi-Fi connectivity | ✅ Implemented |
+| M2C | MQTT JSON telemetry, Black Box logger, Wi-Fi connectivity | ✅ Implemented |
 | M2D | PWA Dashboard | Separate deliverable |
 
 ---

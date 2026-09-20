@@ -157,15 +157,14 @@ void third_wire_set_mode_from_mqtt(const char *action)
 
 void third_wire_set_pwm_duty(uint32_t duty_pct)
 {
-    if (duty_pct > 100) duty_pct = 100;
+    if (duty_pct > 100U) duty_pct = 100U;
 
-    op_mode_t mode = (duty_pct == 0U) ? MODE_OFF :
-                     (duty_pct >= 100U) ? MODE_FULL_POWER : MODE_PWM_50;
+    /* Preserve the PWA-facing mode semantics as PWM_50 even when the hardware output is effectively full-scale,
+     * while still driving the gate with the requested duty. */
+    op_mode_t mode = (duty_pct == 0U) ? MODE_OFF : MODE_PWM_50;
 
     if (mode == MODE_OFF) {
         apply_mode(MODE_OFF, 0U);
-    } else if (mode == MODE_FULL_POWER) {
-        apply_mode(MODE_FULL_POWER, 100U);
     } else {
         pwm_set_duty(duty_pct);
         apply_mode(MODE_PWM_50, duty_pct);
