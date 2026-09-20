@@ -42,11 +42,11 @@ _Static_assert(sizeof(bb_record_t) == 64, "bb_record_t must be 64 bytes");
 #define BB_PARTITION_LABEL   "black_box"
 #define BB_MAX_RECORDS       500
 #define BB_RECORD_SIZE       64
-#define BB_HEADER_SIZE       16   // magic(4) + write_idx(4) + count(4) + crc(4)
-#define BB_HEADER_SLOT_SIZE  32U
+#define BB_HEADER_SIZE       sizeof(bb_header_t)
 #define BB_HEADER_SLOT_COUNT 2U
 #define BB_MAGIC             0xBB24BBBB
-#define BB_RECORD_DATA_OFFSET_DEFAULT 4096
+#define BB_HEADER_SLOT_SIZE  4096U
+#define BB_RECORD_DATA_OFFSET_DEFAULT  (BB_HEADER_SLOT_COUNT * BB_HEADER_SLOT_SIZE)
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
@@ -74,7 +74,10 @@ static uint32_t header_crc(const bb_header_t *h)
  * ---------------------------------------------------------------- */
 static uint32_t header_slot_offset(uint32_t slot)
 {
-    return slot * BB_HEADER_SLOT_SIZE;
+    uint32_t slot_size = (bb_partition && bb_partition->erase_size != 0U)
+        ? bb_partition->erase_size
+        : BB_HEADER_SLOT_SIZE;
+    return slot * slot_size;
 }
 
 static esp_err_t hdr_read(void)
@@ -119,10 +122,15 @@ static esp_err_t hdr_write(void)
 
     uint32_t slot_index = bb_hdr_slot;
     uint32_t slot_offset = header_slot_offset(slot_index);
-    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
-    if (erase_size > 0U) {
-        esp_partition_erase_range(bb_partition, slot_offset, erase_size);
+    uint32_t erase_size = (bb_partition && bb_partition->erase_size != 0U)
+        ? bb_partition->erase_size
+        : BB_HEADER_SLOT_SIZE;
+
+    if ((slot_offset % erase_size) != 0U || (slot_offset + erase_size) > bb_partition->size) {
+        return ESP_ERR_INVALID_SIZE;
     }
+
+    esp_partition_erase_range(bb_partition, slot_offset, erase_size);
 
     esp_err_t err = esp_partition_write(bb_partition, slot_offset, &bb_hdr, sizeof(bb_hdr));
     if (err == ESP_OK) {
@@ -133,8 +141,10 @@ static esp_err_t hdr_write(void)
 
 static uint32_t record_offset(uint32_t idx)
 {
-    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
-    uint32_t start = (erase_size > 0U) ? erase_size : BB_RECORD_DATA_OFFSET_DEFAULT;
+    uint32_t start = BB_RECORD_DATA_OFFSET_DEFAULT;
+    if (bb_partition && bb_partition->erase_size != 0U) {
+        start = BB_HEADER_SLOT_COUNT * bb_partition->erase_size;
+    }
     return start + (idx % BB_MAX_RECORDS) * BB_RECORD_SIZE;
 }
 
@@ -183,9 +193,10 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
     if (bb_hdr.count >= BB_MAX_RECORDS) {
-        uint32_t data_start = (esp_partition_get_erase_size(bb_partition, 0) > 0U)
-            ? esp_partition_get_erase_size(bb_partition, 0)
-            : BB_RECORD_DATA_OFFSET_DEFAULT;
+        uint32_t data_start = BB_RECORD_DATA_OFFSET_DEFAULT;
+        if (bb_partition && bb_partition->erase_size != 0U) {
+            data_start = BB_HEADER_SLOT_COUNT * bb_partition->erase_size;
+        }
         uint32_t data_end = bb_partition->size;
         esp_partition_erase_range(bb_partition, data_start, data_end - data_start);
         bb_hdr.write_idx = 0U;

@@ -71,6 +71,9 @@ typedef enum {
 
 #define TEMP_WARN_C         60
 #define TEMP_SHUTDOWN_C     80
+/* Hardware comparator trips at approximately 21.2 A. The software threshold is intentionally
+ * set higher at 40 A so the hardware protection remains the first layer and the software
+ * threshold is a secondary safeguard. */
 #define OC_MA_DEFAULT       40000
 
 /* ================================================================
