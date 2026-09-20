@@ -215,6 +215,9 @@ void scp_recovery_task(void *arg)
             vTaskDelete(led_task_handle);
             led_task_handle = NULL;
             if (PIN_STATUS_LED != GPIO_NUM_NC) {
+                gpio_set_level(PIN_STATUS_LED, 0);
+            }
+        }
 
         /* ---- RETRY PROBE: check load-side voltage ---- */
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
@@ -256,7 +259,8 @@ void scp_recovery_task(void *arg)
         }
         /* MODE_OFF: gate stays off intentionally */
 
-        /* Monitor closely for 2 seconds */
+        /* Monitor closely for 2 seconds. This is an explicit re-trip check rather
+         * than relying on a fresh FAULT_N falling edge after the signal is already low. */
         bool re_trip = false;
         for (int i = 0; i < 20; i++) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -267,9 +271,13 @@ void scp_recovery_task(void *arg)
         }
 
         if (re_trip) {
-            ESP_LOGW(TAG, "Re-trip within 2s monitor window");
+            ESP_LOGW(TAG, "Re-trip within 2s monitor window — forcing gate off");
             gate_disable();
-            /* Will be caught by ISR next cycle */
+            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+            g_sys.scp_state = SCP_STATE_FAULT_DETECTED;
+            g_sys.fault_active = true;
+            xSemaphoreGive(g_state_mutex);
+            continue;
         } else {
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             g_sys.scp_state    = SCP_STATE_NORMAL;
@@ -309,7 +317,11 @@ void scp_clear_permanent_fault(void)
 {
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.permanent_fault = false;
+    g_sys.fault_active     = false;
+    g_sys.scp_state       = SCP_STATE_NORMAL;
+    g_sys.gate_state      = GATE_OFF;
     g_sys.fault_count     = 0;
     xSemaphoreGive(g_state_mutex);
+    gpio_set_level(PIN_GATE_CTRL, 0);
     ESP_LOGI(TAG, "Permanent fault cleared by MQTT command");
 }

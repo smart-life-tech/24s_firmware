@@ -150,6 +150,10 @@ void gate_hold_off(void)
 {
     ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
     gpio_set_level(PIN_GATE_CTRL, 0);
+
+    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+    g_sys.gate_state = GATE_OFF;
+    xSemaphoreGive(g_state_mutex);
 }
 
 uint32_t adc_read_mv(adc1_channel_t channel)
