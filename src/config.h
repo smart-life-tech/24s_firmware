@@ -47,8 +47,9 @@
 #define LEDC_TIMER          LEDC_TIMER_0
 #define LEDC_SPEED_MODE     LEDC_LOW_SPEED_MODE
 #define LEDC_FREQ_HZ        20000
-#define LEDC_RESOLUTION     LEDC_TIMER_13_BIT
-#define LEDC_DUTY_50PCT     4096
+#define LEDC_RESOLUTION     LEDC_TIMER_11_BIT
+#define LEDC_DUTY_50PCT     1024U
+#define LEDC_DUTY_MAX       2047UL
 
 /* ================================================================
  *  Cell thresholds

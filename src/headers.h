@@ -54,8 +54,9 @@ void     pwm_apply_pot(void);
 /* black_box.h */
 #pragma once
 #include "config.h"
+#include <stdbool.h>
 #include <stdint.h>
-typedef void (*mqtt_publish_fn_t)(const char *topic, const char *payload);
+typedef bool (*mqtt_publish_fn_t)(const char *topic, const char *payload);
 void black_box_init(void);
 void black_box_write_boot_event(void);
 void black_box_write_telemetry_snapshot(void);
@@ -71,13 +72,14 @@ uint32_t black_box_record_count(void);
 /* mqtt_telemetry.h */
 #pragma once
 #include "config.h"
+#include <stdbool.h>
 #include <stdint.h>
 void mqtt_telemetry_task(void *arg);
 void mqtt_fault_task(void *arg);
 void mqtt_publish_fault(const char *fault_type, int32_t peak_current);
 void mqtt_publish_recovery_eta(uint32_t eta_seconds);
 void mqtt_publish_gate_state_change(op_mode_t mode);
-void mqtt_publish_raw(const char *topic, const char *payload);
+bool mqtt_publish_raw(const char *topic, const char *payload);
 void mqtt_handle_command(const char *topic, int topic_len,
                           const char *data, int data_len);
 

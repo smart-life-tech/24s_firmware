@@ -30,8 +30,8 @@ void pwm_set_duty(uint32_t duty_pct)
 {
     if (duty_pct > 100) duty_pct = 100;
 
-    /* 13-bit max = 8191 */
-    uint32_t duty_counts = (duty_pct * 8191UL) / 100UL;
+    /* 11-bit maximum at 20 kHz with the ESP32-S2 80 MHz APB clock: 2047 counts */
+    uint32_t duty_counts = (duty_pct * LEDC_DUTY_MAX) / 100UL;
 
     ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty_counts);
     ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);

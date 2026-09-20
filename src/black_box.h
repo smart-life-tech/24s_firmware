@@ -1,8 +1,9 @@
 #pragma once
 #include "config.h"
+#include <stdbool.h>
 #include <stdint.h>
 
-typedef void (*mqtt_publish_fn_t)(const char *topic, const char *payload);
+typedef bool (*mqtt_publish_fn_t)(const char *topic, const char *payload);
 
 void black_box_init(void);
 void black_box_write_boot_event(void);

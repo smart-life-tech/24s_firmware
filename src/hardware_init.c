@@ -18,7 +18,7 @@ static const char *TAG = "HW_INIT";
 esp_adc_cal_characteristics_t g_adc_chars;
 spi_device_handle_t g_spi_ltc;
 
-static void init_gpio(void)
+static esp_err_t init_gpio(void)
 {
     gpio_config_t gate_cfg = {
         .pin_bit_mask = (1ULL << PIN_GATE_CTRL),
@@ -27,7 +27,8 @@ static void init_gpio(void)
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&gate_cfg);
+    esp_err_t err = gpio_config(&gate_cfg);
+    if (err != ESP_OK) return err;
     gpio_set_level(PIN_GATE_CTRL, 0);
 
     gpio_config_t fault_cfg = {
@@ -37,7 +38,8 @@ static void init_gpio(void)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_NEGEDGE,
     };
-    gpio_config(&fault_cfg);
+    err = gpio_config(&fault_cfg);
+    if (err != ESP_OK) return err;
 
     if (PIN_STATUS_LED != GPIO_NUM_NC) {
         gpio_config_t led_cfg = {
@@ -47,14 +49,19 @@ static void init_gpio(void)
             .pull_down_en = GPIO_PULLDOWN_DISABLE,
             .intr_type    = GPIO_INTR_DISABLE,
         };
-        gpio_config(&led_cfg);
+        err = gpio_config(&led_cfg);
+        if (err != ESP_OK) return err;
         gpio_set_level(PIN_STATUS_LED, 0);
     }
 
-    gpio_install_isr_service(0);
+    err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        return err;
+    }
+    return ESP_OK;
 }
 
-static void init_ledc(void)
+static esp_err_t init_ledc(void)
 {
     ledc_timer_config_t timer = {
         .speed_mode      = LEDC_SPEED_MODE,
@@ -63,7 +70,8 @@ static void init_ledc(void)
         .freq_hz         = LEDC_FREQ_HZ,
         .clk_cfg         = LEDC_AUTO_CLK,
     };
-    ledc_timer_config(&timer);
+    esp_err_t err = ledc_timer_config(&timer);
+    if (err != ESP_OK) return err;
 
     ledc_channel_config_t ch = {
         .gpio_num   = PIN_GATE_CTRL,
@@ -73,11 +81,13 @@ static void init_ledc(void)
         .duty       = 0,
         .hpoint     = 0,
     };
-    ledc_channel_config(&ch);
+    err = ledc_channel_config(&ch);
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "LEDC 20kHz configured on GPIO %d", PIN_GATE_CTRL);
+    return ESP_OK;
 }
 
-static void init_spi(void)
+static esp_err_t init_spi(void)
 {
     spi_bus_config_t bus = {
         .mosi_io_num   = PIN_SPI_MOSI,
@@ -87,7 +97,8 @@ static void init_spi(void)
         .quadhd_io_num = -1,
         .max_transfer_sz = 256,
     };
-    spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
+    esp_err_t err = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
+    if (err != ESP_OK) return err;
 
     spi_device_interface_config_t ltc_dev = {
         .clock_speed_hz = 1000000,
@@ -95,31 +106,45 @@ static void init_spi(void)
         .spics_io_num   = PIN_LTC_CS,
         .queue_size     = 4,
     };
-    spi_bus_add_device(SPI2_HOST, &ltc_dev, &g_spi_ltc);
+    err = spi_bus_add_device(SPI2_HOST, &ltc_dev, &g_spi_ltc);
+    if (err != ESP_OK) return err;
 
     ESP_LOGI(TAG, "SPI bus initialized with LTC6811-1 on GPIO39/38");
+    return ESP_OK;
 }
 
-static void init_adc(void)
+static esp_err_t init_adc(void)
 {
-    adc1_config_width(ADC_WIDTH_BIT_12);
-    adc1_config_channel_atten(PIN_NTC_1, ADC_ATTEN_DB_11);
-    adc1_config_channel_atten(PIN_NTC_2, ADC_ATTEN_DB_11);
-    adc1_config_channel_atten(PIN_NTC_3, ADC_ATTEN_DB_11);
-    adc1_config_channel_atten(PIN_NTC_4, ADC_ATTEN_DB_11);
-    adc1_config_channel_atten(PIN_INA240_ADC, ADC_ATTEN_DB_11);
+    esp_err_t err = adc1_config_width(ADC_WIDTH_BIT_12);
+    if (err != ESP_OK) return err;
+    err = adc1_config_channel_atten(PIN_NTC_1, ADC_ATTEN_DB_11);
+    if (err != ESP_OK) return err;
+    err = adc1_config_channel_atten(PIN_NTC_2, ADC_ATTEN_DB_11);
+    if (err != ESP_OK) return err;
+    err = adc1_config_channel_atten(PIN_NTC_3, ADC_ATTEN_DB_11);
+    if (err != ESP_OK) return err;
+    err = adc1_config_channel_atten(PIN_NTC_4, ADC_ATTEN_DB_11);
+    if (err != ESP_OK) return err;
+    err = adc1_config_channel_atten(PIN_INA240_ADC, ADC_ATTEN_DB_11);
+    if (err != ESP_OK) return err;
 
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11,
-                             ADC_WIDTH_BIT_12, 1100, &g_adc_chars);
+    err = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11,
+                                   ADC_WIDTH_BIT_12, 1100, &g_adc_chars);
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "ADC initialized");
+    return ESP_OK;
 }
 
 esp_err_t hardware_init(void)
 {
-    init_gpio();
-    init_ledc();
-    init_spi();
-    init_adc();
+    esp_err_t err = init_gpio();
+    if (err != ESP_OK) return err;
+    err = init_ledc();
+    if (err != ESP_OK) return err;
+    err = init_spi();
+    if (err != ESP_OK) return err;
+    err = init_adc();
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "Hardware init complete");
     return ESP_OK;
 }

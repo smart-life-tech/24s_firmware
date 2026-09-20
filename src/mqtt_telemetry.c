@@ -342,10 +342,11 @@ void mqtt_publish_gate_state_change(op_mode_t mode)
 /* ----------------------------------------------------------------
  *  Raw publish (used by black_box upload)
  * ---------------------------------------------------------------- */
-void mqtt_publish_raw(const char *topic, const char *payload)
+bool mqtt_publish_raw(const char *topic, const char *payload)
 {
-    if (!mqtt_connected || !mqtt_client) return;
-    esp_mqtt_client_publish(mqtt_client, topic, payload, 0, 0, 0);
+    if (!mqtt_connected || !mqtt_client) return false;
+    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, payload, 0, 0, 0);
+    return (msg_id >= 0);
 }
 
 /* ----------------------------------------------------------------

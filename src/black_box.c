@@ -192,10 +192,13 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
-    /* Ring-buffer behavior: once full, overwrite the oldest record rather than
-     * erasing the whole partition and losing the entire fault history. */
+    /* Flash-safe bounded-file policy:
+     * once the log reaches capacity, reset the in-memory sequence and discard the
+     * oldest content in one clean step rather than risking unsafe partial writes
+     * to the NOR flash region. This is a safe full-buffer reset, not a true ring. */
     if (bb_hdr.count >= BB_MAX_RECORDS) {
-        bb_hdr.count = BB_MAX_RECORDS;
+        bb_hdr.write_idx = 0U;
+        bb_hdr.count = 0U;
     }
 
     bb_record_t rec = {0};
@@ -340,7 +343,7 @@ static const char *bb_event_name(uint16_t event_type)
 
 void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
 {
-    if (!bb_partition || bb_hdr.count == 0) return;
+    if (!bb_partition || bb_hdr.count == 0 || !publish_fn) return;
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
@@ -354,6 +357,7 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
     char topic[64];
     snprintf(topic, sizeof(topic), "hub/%s/blackbox", CONFIG_DEVICE_ID);
 
+    bool upload_ok = true;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t idx = (start + i) % BB_MAX_RECORDS;
         uint32_t offset = record_offset(idx);
@@ -372,18 +376,24 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
             rec.timestamp, bb_event_name(rec.event_type), rec.pack_current_ma,
             rec.pack_voltage_mv, rec.event_type, retry_count);
 
-        publish_fn(topic, json_buf);
+        if (!publish_fn(topic, json_buf)) {
+            ESP_LOGW(TAG, "Black Box publish failed at record %u — leaving buffer intact", i);
+            upload_ok = false;
+            break;
+        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
-    esp_partition_erase_range(bb_partition, 0, bb_partition->size);
-    bb_hdr.magic     = BB_MAGIC;
-    bb_hdr.write_idx = 0;
-    bb_hdr.count     = 0;
-    hdr_write();
+    if (upload_ok) {
+        esp_partition_erase_range(bb_partition, 0, bb_partition->size);
+        bb_hdr.magic     = BB_MAGIC;
+        bb_hdr.write_idx = 0;
+        bb_hdr.count     = 0;
+        hdr_write();
+        ESP_LOGI(TAG, "Black Box upload complete — buffer cleared");
+    }
 
     xSemaphoreGive(bb_mutex);
-    ESP_LOGI(TAG, "Black Box upload complete — buffer cleared");
 }
 
 /* ----------------------------------------------------------------
