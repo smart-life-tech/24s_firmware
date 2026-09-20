@@ -143,12 +143,10 @@ BROKER    = "mqtt://192.168.1.100:1883"
 # (Implement as IDF console component or use nvs_partition_gen.py)
 ```
 
-### 5.2 Pair keyfob (write DeviceID to nRF24 receiver NVS)
-- Physical access to **J8 SPI header** is required
-- Connect a programmer to J8
-- Flash the pairing tool: `idf.py -p /dev/ttyUSB1 -C tools/pairing flash`
-- Enter the 16-bit DeviceID when prompted
-- This writes to NVS (NOT eFuse — eFuse write is a separate one-time step)
+### 5.2 Provision the unit metadata
+- The final hardware uses a GPIO4 gate/PWM control path and 4 dedicated NTC channels.
+- Store the unit-specific DeviceID in the project configuration and NVS as required for the deployment.
+- Use the board's normal provisioning workflow for the installed environment; there is no RF keyfob pairing path in the final firmware revision.
 
 ---
 
@@ -164,25 +162,22 @@ During normal boot you should see:
 [3/8] Black Box init...
       Black Box ready: 0 records stored, next write idx 0
       Boot event logged
-[4/8] LTC6813 self-test...
-      LTC6813 OK — 24 cells verified
-[5/8] INA240 + TLV3501 idle check...
+[4/8] LTC6811 self-test...
+      LTC6811 OK — 24 cells verified
+[5/8] INA240 + gate health check...
       INA240 idle OK
 [6/8] Wi-Fi connect (30s timeout, offline mode if miss)...
-[7/8] Waiting for RF handshake (30s)...
-      RF handshake confirmed! DeviceID=XXXX Nonce=1
-[8/8] Pre-bias sense...
-Gate ENABLE — 72V rail going live
+[7/8] MQTT telemetry ready...
+[8/8] System ready — gate remains in configured default state
 === Boot complete — entering main loop ===
 ```
 
 ### Common boot errors:
 | Error message | Cause | Fix |
 |---|---|---|
-| `LTC6813 self-test FAILED` | Cell tap disconnected or isoSPI wiring error | Check J1/J2 connectors and SM91502ALA isolation transformers |
-| `INA240 idle check FAILED` | Shorted sense path or stuck TLV3501 | Check R1 (0.5Ω), U3 (INA240), and U4 (TLV3501) |
-| `RF handshake timeout` | Keyfob not paired or out of range | Press keyfob within 30s, check nRF24 SPI wiring |
-| `black_box partition not found` | Partition table mismatch | Run `idf.py erase-flash` then reflash with custom partitions.csv |
+| `LTC6811 self-test FAILED` | Cell tap disconnected or isoSPI wiring error | Check the LTC6811 daisy-chain wiring and J1/J2 isolation path |
+| `INA240 idle check FAILED` | Shorted sense path or stuck current fault path | Check the INA240 current-sense path and load wiring |
+| `black_box partition not found` | Partition table mismatch | Verify the custom partitions.csv and reflash using the project partition table |
 | `NVS needs erase — reflashing` | NVS version change after firmware update | Normal on major updates — config resets to defaults |
 
 ---
@@ -233,22 +228,24 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 
 ```
 24s_firmware/
-├── CMakeLists.txt          ← Top-level build file
+├── CMakeLists.txt          ← Top-level ESP-IDF project file
+├── platformio.ini          ← PlatformIO project configuration (primary build route)
 ├── partitions.csv          ← Custom partition table (includes black_box partition)
 ├── sdkconfig.defaults      ← ESP-IDF configuration overrides
-└── main/
-    ├── CMakeLists.txt      ← Component registration
-    ├── config.h            ← ALL pin definitions, thresholds, shared types
-    ├── main.c              ← Boot sequence + task spawning (app_main)
-    ├── hardware_init.c     ← GPIO, LEDC, SPI, ADC init
-    ├── ltc6813.c           ← LTC6813-1 isoSPI driver + cell monitoring task
-    ├── scp_recovery.c      ← Hardware SCP + 10-second auto-recovery state machine
-    ├── third_wire.c        ← Third Wire GPIO logic + mode state machine
-    ├── pwm_mode.c          ← LEDC PWM helpers (20kHz, 13-bit)
-    ├── black_box.c         ← Offline ring-buffer logger (512KB flash partition)
-    ├── mqtt_telemetry.c    ← Bidirectional MQTT JSON telemetry
-    ├── subsystems.c        ← rf_handshake, ina240, pre_bias, config NVS
-    └── headers.h           ← All module header declarations
+├── src/
+│   ├── CMakeLists.txt      ← Component registration for the firmware module
+│   ├── config.h            ← GPIO map, thresholds, shared state
+│   ├── main.c              ← Boot sequence + task spawning
+│   ├── hardware_init.c     ← GPIO, LEDC, SPI, ADC init
+│   ├── ltc6811.c           ← LTC6811 isoSPI driver + cell monitoring task
+│   ├── scp_recovery.c      ← Hardware SCP + recovery state machine
+│   ├── third_wire.c        ← GPIO4 gate/PWM control path
+│   ├── pwm_mode.c          ← LEDC PWM helpers (20kHz, 13-bit)
+│   ├── black_box.c         ← Offline ring-buffer logger
+│   ├── mqtt_telemetry.c    ← Bidirectional MQTT JSON telemetry
+│   ├── subsystems.c        ← INA240, NVS, overall state handling
+│   └── *.h                 ← Interface declarations for each module
+└── FLASHING_GUIDE.md       ← Build and flash instructions
 ```
 
 ---
@@ -256,23 +253,26 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 ## 9. DEVELOPMENT WORKFLOW
 
 ```bash
-# Day-to-day: edit → build → flash → monitor
-idf.py build && idf.py -p /dev/ttyUSB0 flash monitor
+# Primary project workflow:
+platformio run
+platformio run --target upload
+platformio device monitor
+
+# Alternative ESP-IDF flow when using the raw IDF toolchain:
+idf.py set-target esp32s2
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
 
 # Check component sizes:
 idf.py size-components
 
 # Run on-chip analysis:
 idf.py -p /dev/ttyUSB0 monitor --print_filter="SCP:E,MQTT:I,MAIN:I"
-
-# Generate compile_commands.json for IDE (VS Code / CLion):
-idf.py set-target esp32s2
-idf.py reconfigure
-# Then open folder in VS Code with ESP-IDF extension installed
 ```
 
 ### Recommended VS Code extensions:
-- **Espressif IDF** (official) — provides IntelliSense, flash, monitor
+- **PlatformIO** (official) — primary project workflow
+- **Espressif IDF** (official) — fallback if using raw ESP-IDF tooling
 - **C/C++** (Microsoft)
 - **CMake Tools**
 
@@ -282,9 +282,9 @@ idf.py reconfigure
 
 | Phase | Scope | Status |
 |---|---|---|
-| M2A | Boot, SCP recovery, Third Wire, LTC6813, cell balancing | ✅ Implemented |
-| M2B | LEDC PWM 20kHz, nRF24 handshake, pre-bias ADC | ✅ Implemented |
-| M2C | MQTT JSON telemetry, Black Box ring buffer, Wi-Fi/4G | ✅ Implemented |
+| M2A | Boot, SCP recovery, GPIO4 gate/PWM path, LTC6811 cell balancing | ✅ Implemented |
+| M2B | LEDC PWM 20kHz, NTC telemetry, ESP-IDF project packaging | ✅ Implemented |
+| M2C | MQTT JSON telemetry, Black Box ring buffer, Wi-Fi connectivity | ✅ Implemented |
 | M2D | PWA Dashboard | Separate deliverable |
 
 ---

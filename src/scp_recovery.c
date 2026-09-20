@@ -219,21 +219,32 @@ void scp_recovery_task(void *arg)
             }
         }
 
-        /* ---- RETRY PROBE: check load-side voltage ---- */
+        /* ---- RETRY PROBE: re-enable the gate briefly and measure true load current ---- */
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
         g_sys.scp_state = SCP_STATE_RETRY_PROBE;
+        op_mode_t restore_mode = g_sys.op_mode;
+        uint32_t  restore_duty = g_sys.pwm_duty_pct;
         xSemaphoreGive(g_state_mutex);
 
+        if (restore_mode == MODE_FULL_POWER) {
+            gate_enable_full();
+        } else if (restore_mode == MODE_PWM_50) {
+            gate_enable_pwm(restore_duty);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
         int32_t probe_current = ina240_read_current_ma();
         uint32_t abs_probe_current = (probe_current < 0) ? (uint32_t)(-probe_current) : (uint32_t)probe_current;
+        uint32_t probe_threshold_ma = (g_sys.oc_ma > 0U) ? ((g_sys.oc_ma * SCP_PROBE_SHORTED_PCT) / 100U) : 2000U;
 
-        ESP_LOGI(TAG, "Retry probe: current %d mA", probe_current);
+        ESP_LOGI(TAG, "Retry probe: current %d mA, threshold %u mA", probe_current, probe_threshold_ma);
 
         black_box_write_recovery_attempt(g_sys.retry_count, abs_probe_current);
 
-        if (abs_probe_current > 2000U) {
-            /* Load still shorted — back to recovery wait */
-            ESP_LOGW(TAG, "Load still shorted: current %d mA > 2000 mA", probe_current);
+        if (abs_probe_current > probe_threshold_ma) {
+            /* Load still shorted — restore the safe OFF state and retry later. */
+            ESP_LOGW(TAG, "Load still shorted: current %d mA > %u mA", probe_current, probe_threshold_ma);
+            gate_disable();
             mqtt_publish_fault("PROBE_SHORTED", probe_current);
             xQueueSend(scp_evt_queue, &evt, 0);  // re-queue to stay in loop
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
@@ -243,20 +254,6 @@ void scp_recovery_task(void *arg)
             continue;
         }
 
-        /* ---- GATE RESTORE ---- */
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.scp_state = SCP_STATE_GATE_RESTORE;
-        op_mode_t restore_mode = g_sys.op_mode;
-        uint32_t  restore_duty = g_sys.pwm_duty_pct;
-        xSemaphoreGive(g_state_mutex);
-
-        ESP_LOGI(TAG, "Gate restore in mode %d", restore_mode);
-
-        if (restore_mode == MODE_FULL_POWER) {
-            gate_enable_full();
-        } else if (restore_mode == MODE_PWM_50) {
-            gate_enable_pwm(restore_duty);
-        }
         /* MODE_OFF: gate stays off intentionally */
 
         /* Monitor closely for 2 seconds. This is an explicit re-trip check rather

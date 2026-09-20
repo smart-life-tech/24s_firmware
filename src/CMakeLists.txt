@@ -20,6 +20,7 @@ idf_component_register(
         nvs_flash
         esp_adc_cal
         spi_flash
+        json
         esp_timer
         freertos
 )
