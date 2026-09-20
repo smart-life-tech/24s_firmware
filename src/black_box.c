@@ -367,9 +367,9 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
 
         snprintf(json_buf, sizeof(json_buf),
             "{\"timestamp\":%u,\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
-            "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\"}",
+            "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\",\"retry_count\":%u}",
             rec.timestamp, bb_event_name(rec.event_type), rec.pack_current_ma,
-            rec.pack_voltage_mv, rec.event_type);
+            rec.pack_voltage_mv, rec.event_type, rec.fault_flags);
 
         publish_fn(topic, json_buf);
         vTaskDelay(pdMS_TO_TICKS(20));

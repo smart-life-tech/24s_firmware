@@ -167,7 +167,7 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
   "pack_current_ma": 18200,
   "soc_percent": 72.4,
   "temp_avg_c": 30.5,
-  "temp_sensors_c": [31.2, 29.8, 30.5],
+  "temp_sensors_c": [31.2, 29.8, 30.5, 30.1],
   "gate_state": "PWM_50",
   "pwm_duty_percent": 50,
   "fault_active": false,
