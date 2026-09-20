@@ -264,10 +264,11 @@ void black_box_write_fault(fault_type_t fault, int32_t peak_current,
                             uint32_t voltage_mv)
 {
     uint16_t ev;
+    uint8_t retry_byte = 0U;
     switch (fault) {
-    case FAULT_SCP_TRIP:       ev = 0x0020; break;
-    case FAULT_SCP_RECOVERY:   ev = 0x0021; break;
-    case FAULT_SCP_PERMANENT:  ev = 0x0022; break;
+    case FAULT_SCP_TRIP:       ev = 0x0020; retry_byte = (uint8_t)(g_sys.retry_count & 0xFFU); break;
+    case FAULT_SCP_RECOVERY:   ev = 0x0021; retry_byte = (uint8_t)(g_sys.retry_count & 0xFFU); break;
+    case FAULT_SCP_PERMANENT:  ev = 0x0022; retry_byte = (uint8_t)(g_sys.retry_count & 0xFFU); break;
     case FAULT_CELL_OV:        ev = 0x0030; break;
     case FAULT_CELL_UV:        ev = 0x0031; break;
     case FAULT_PACK_OV:        ev = 0x0032; break;
@@ -277,7 +278,7 @@ void black_box_write_fault(fault_type_t fault, int32_t peak_current,
     default:                   ev = 0x0000; break;
     }
     bb_write_record(ev, peak_current, voltage_mv,
-                    (uint8_t)fault, NULL, (uint8_t)g_sys.temp_avg_c);
+                    retry_byte, NULL, (uint8_t)g_sys.temp_avg_c);
     ESP_LOGW(TAG, "Fault [0x%04X] logged, peak %d mA", ev, peak_current);
 }
 
@@ -365,11 +366,16 @@ void black_box_upload_and_clear(mqtt_publish_fn_t publish_fn)
         bb_record_t rec;
         esp_partition_read(bb_partition, offset, &rec, sizeof(rec));
 
+        uint32_t retry_count = 0U;
+        if (rec.event_type == 0x0020 || rec.event_type == 0x0021 || rec.event_type == 0x0022) {
+            retry_count = (uint32_t)rec.fault_flags;
+        }
+
         snprintf(json_buf, sizeof(json_buf),
             "{\"timestamp\":%u,\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
             "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\",\"retry_count\":%u}",
             rec.timestamp, bb_event_name(rec.event_type), rec.pack_current_ma,
-            rec.pack_voltage_mv, rec.event_type, rec.fault_flags);
+            rec.pack_voltage_mv, rec.event_type, retry_count);
 
         publish_fn(topic, json_buf);
         vTaskDelay(pdMS_TO_TICKS(20));

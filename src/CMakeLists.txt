@@ -18,7 +18,7 @@ idf_component_register(
         esp_wifi
         mqtt
         nvs_flash
-        esp_adc_cal
+        esp_adc
         spi_flash
         json
         esp_timer

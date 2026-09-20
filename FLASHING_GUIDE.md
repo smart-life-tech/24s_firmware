@@ -232,4 +232,4 @@ platformio device monitor
 ---
 
 *Architecture: Syncro Pakistan — Milestone 2 Firmware v1.0*
-*Target: ESP32-S2-WROVER-I | IDF v5.2 | FreeRTOS*
+*Target: ESP32-S2-WROVER-I | ESP-IDF 5.5.3 | FreeRTOS*
