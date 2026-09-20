@@ -18,10 +18,6 @@ esp_err_t ltc6811_self_test(void);
 esp_err_t ltc6811_read_all_cells(uint16_t *cell_mv_out);
 void cell_monitor_task(void *arg);
 
-/* Deprecated compatibility aliases kept for legacy callers. */
-esp_err_t ltc6813_self_test(void);
-esp_err_t ltc6813_read_all_cells(uint16_t *cell_mv_out);
-
 /* ina240.h */
 #pragma once
 #include "esp_err.h"

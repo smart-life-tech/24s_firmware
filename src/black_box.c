@@ -50,9 +50,10 @@ _Static_assert(sizeof(bb_record_t) == 64, "bb_record_t must be 64 bytes");
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
+    uint32_t sequence;     // total records ever written; monotonic across wraps
     uint32_t write_idx;    // next write position (0-based)
     uint32_t count;        // total records stored (saturates at BB_MAX_RECORDS)
-    uint32_t crc;          // simple XOR checksum of above 3 fields
+    uint32_t crc;          // simple XOR checksum of above 4 fields
 } bb_header_t;
 
 static const esp_partition_t *bb_partition = NULL;
@@ -65,7 +66,7 @@ static SemaphoreHandle_t      bb_mutex;
  * ---------------------------------------------------------------- */
 static uint32_t header_crc(const bb_header_t *h)
 {
-    return h->magic ^ h->write_idx ^ h->count;
+    return h->magic ^ h->sequence ^ h->write_idx ^ h->count;
 }
 
 /* ----------------------------------------------------------------
@@ -93,16 +94,17 @@ static esp_err_t hdr_read(void)
 
     if (!valid_a && !valid_b) {
         bb_hdr.magic     = BB_MAGIC;
-        bb_hdr.write_idx = 0;
-        bb_hdr.count     = 0;
+        bb_hdr.sequence  = 0U;
+        bb_hdr.write_idx = 0U;
+        bb_hdr.count     = 0U;
         bb_hdr.crc       = header_crc(&bb_hdr);
         bb_hdr_slot      = 0U;
         return ESP_OK;
     }
 
     if (valid_a && valid_b) {
-        bb_hdr = (slot_a.write_idx >= slot_b.write_idx) ? slot_a : slot_b;
-        bb_hdr_slot = (slot_a.write_idx >= slot_b.write_idx) ? 0U : 1U;
+        bb_hdr = (slot_a.sequence >= slot_b.sequence) ? slot_a : slot_b;
+        bb_hdr_slot = (slot_a.sequence >= slot_b.sequence) ? 0U : 1U;
         return ESP_OK;
     }
 
@@ -113,20 +115,19 @@ static esp_err_t hdr_read(void)
 
 static esp_err_t hdr_write(void)
 {
-    /* Keep the header update out of the hot record path. The header is only
-     * updated as a lightweight metadata checkpoint and is not erased on every
-     * record write. This is still a simplified implementation rather than a
-     * full flash-journal design, but it avoids the per-record sector erase that
-     * would otherwise wear the partition prematurely. */
     bb_hdr.crc = header_crc(&bb_hdr);
 
-    uint32_t slot_offset = header_slot_offset(bb_hdr_slot);
-    esp_err_t err = esp_partition_write(bb_partition, slot_offset, &bb_hdr, sizeof(bb_hdr));
-
-    if (err == ESP_OK) {
-        bb_hdr_slot = (bb_hdr_slot + 1U) % BB_HEADER_SLOT_COUNT;
+    uint32_t slot_index = bb_hdr_slot;
+    uint32_t slot_offset = header_slot_offset(slot_index);
+    uint32_t erase_size = esp_partition_get_erase_size(bb_partition, 0);
+    if (erase_size > 0U) {
+        esp_partition_erase_range(bb_partition, slot_offset, erase_size);
     }
 
+    esp_err_t err = esp_partition_write(bb_partition, slot_offset, &bb_hdr, sizeof(bb_hdr));
+    if (err == ESP_OK) {
+        bb_hdr_slot = (slot_index + 1U) % BB_HEADER_SLOT_COUNT;
+    }
     return err;
 }
 
@@ -159,8 +160,9 @@ void black_box_init(void)
         ESP_LOGW(TAG, "Invalid header — formatting partition");
         esp_partition_erase_range(bb_partition, 0, bb_partition->size);
         bb_hdr.magic     = BB_MAGIC;
-        bb_hdr.write_idx = 0;
-        bb_hdr.count     = 0;
+        bb_hdr.sequence  = 0U;
+        bb_hdr.write_idx = 0U;
+        bb_hdr.count     = 0U;
         bb_hdr_slot      = 0U;
         hdr_write();
     }
@@ -180,6 +182,16 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
+    if (bb_hdr.count >= BB_MAX_RECORDS) {
+        uint32_t data_start = (esp_partition_get_erase_size(bb_partition, 0) > 0U)
+            ? esp_partition_get_erase_size(bb_partition, 0)
+            : BB_RECORD_DATA_OFFSET_DEFAULT;
+        uint32_t data_end = bb_partition->size;
+        esp_partition_erase_range(bb_partition, data_start, data_end - data_start);
+        bb_hdr.write_idx = 0U;
+        bb_hdr.count = 0U;
+    }
+
     bb_record_t rec = {0};
     rec.timestamp       = (uint32_t)(time(NULL));
     rec.event_type      = event_type;
@@ -196,17 +208,14 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
     }
 
     uint32_t offset = record_offset(bb_hdr.write_idx);
-
-    /*
-     * Keep the header in the first erase sector and the ring records in the
-     * subsequent sector(s). This avoids erasing previously logged records when
-     * a header field is updated.
-     */
     esp_partition_write(bb_partition, offset, &rec, sizeof(rec));
 
-    bb_hdr.write_idx = (bb_hdr.write_idx + 1) % BB_MAX_RECORDS;
+    bb_hdr.sequence++;
+    bb_hdr.write_idx = (bb_hdr.write_idx + 1U) % BB_MAX_RECORDS;
     if (bb_hdr.count < BB_MAX_RECORDS) bb_hdr.count++;
-    hdr_write();
+    if ((bb_hdr.sequence % 8U) == 0U || bb_hdr.count == BB_MAX_RECORDS) {
+        hdr_write();
+    }
 
     xSemaphoreGive(bb_mutex);
 
