@@ -297,11 +297,13 @@ void black_box_write_cell_threshold(fault_type_t fault, uint8_t cell_idx,
 {
     uint16_t cells[CELL_COUNT];
     memcpy(cells, g_sys.cell_mv, sizeof(cells));
-    /* Current is not meaningful for a threshold event. Preserve the threshold
-     * fault and cell voltage data, while keeping the current field at 0. */
+    /* Preserve the real pack voltage in the exported voltage field. The
+     * offending cell value remains available in the record payload, while the
+     * current field remains 0 because this event is not a current sample. */
     (void)cell_idx;
-    bb_write_record(0x0030, 0, cell_mv, (uint8_t)fault,
+    bb_write_record(0x0030, 0, g_sys.pack_voltage_mv, (uint8_t)fault,
                     cells, (uint8_t)g_sys.temp_avg_c);
+    (void)cell_mv;
 }
 
 void black_box_write_temp_alert(uint8_t sensor_idx, float temp_c)

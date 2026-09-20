@@ -285,7 +285,7 @@ void scp_recovery_task(void *arg)
 }
 
 /* ----------------------------------------------------------------
- *  Called from boot sequence after handshake confirms
+ *  Apply the current persisted gate mode after an SCP recovery state change.
  * ---------------------------------------------------------------- */
 void scp_recovery_enable_gate(void)
 {
@@ -299,7 +299,7 @@ void scp_recovery_enable_gate(void)
     } else if (mode == MODE_PWM_50) {
         gate_enable_pwm(duty);
     }
-    /* Default mode is OFF — gate stays off until Third Wire pulse */
+    /* Default mode is OFF — the gate remains disabled until software chooses a valid mode. */
 }
 
 /* ----------------------------------------------------------------
