@@ -433,6 +433,11 @@ static float ntc_read_temperature(int sensor_idx)
  * ---------------------------------------------------------------- */
 static void check_thresholds(const uint16_t *cells)
 {
+    static bool last_cell_ov[CELL_COUNT] = {false};
+    static bool last_cell_uv[CELL_COUNT] = {false};
+    static bool last_oc_fault = false;
+    static bool last_pack_ov_fault = false;
+
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     uint32_t ov = g_sys.ov_mv;
     uint32_t uv = g_sys.uv_mv;
@@ -444,18 +449,32 @@ static void check_thresholds(const uint16_t *cells)
     bool cell_fault = false;
     for (int i = 0; i < CELL_COUNT; i++) {
         pack_total_mv += cells[i];
-        if (cells[i] >= ov) {
+
+        bool ov_now = (cells[i] >= ov);
+        bool uv_now = (cells[i] <= uv);
+
+        if (ov_now && !last_cell_ov[i]) {
             cell_fault = true;
             g_sys.fault_active = true;
             ESP_LOGW(TAG, "Cell %d OV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_OV, i, cells[i]);
             mqtt_publish_fault("CELL_OV", 0);
-        } else if (cells[i] <= uv) {
+        }
+        last_cell_ov[i] = ov_now;
+
+        if (uv_now && !last_cell_uv[i]) {
             cell_fault = true;
             g_sys.fault_active = true;
             ESP_LOGW(TAG, "Cell %d UV: %d mV", i+1, cells[i]);
             black_box_write_cell_threshold(FAULT_CELL_UV, i, cells[i]);
             mqtt_publish_fault("CELL_UV", 0);
+        }
+        last_cell_uv[i] = uv_now;
+
+        if (!ov_now && !uv_now) {
+            /* clear redundant fault state while not active */
+            last_cell_ov[i] = false;
+            last_cell_uv[i] = false;
         }
     }
 
@@ -463,21 +482,25 @@ static void check_thresholds(const uint16_t *cells)
         gate_hold_off();
     }
 
-    if (oc_ma > 0U && pack_current_ma > (int32_t)oc_ma) {
+    bool oc_now = (oc_ma > 0U && pack_current_ma > (int32_t)oc_ma);
+    if (oc_now && !last_oc_fault) {
         g_sys.fault_active = true;
         gate_hold_off();
         ESP_LOGE(TAG, "Over-current trip: %ld mA > %u mA", (long)pack_current_ma, oc_ma);
         black_box_write_fault(FAULT_SCP_TRIP, pack_current_ma, pack_total_mv);
         mqtt_publish_fault("OC_LIMIT", pack_current_ma);
     }
+    last_oc_fault = oc_now;
 
-    if (pack_total_mv >= PACK_CUTOFF_MV) {
+    bool pack_ov_now = (pack_total_mv >= PACK_CUTOFF_MV);
+    if (pack_ov_now && !last_pack_ov_fault) {
         g_sys.fault_active = true;
         ESP_LOGE(TAG, "Pack cutoff reached: %u mV >= %u mV", pack_total_mv, PACK_CUTOFF_MV);
         gate_hold_off();
         black_box_write_fault(FAULT_PACK_OV, 0, pack_total_mv);
         mqtt_publish_fault("PACK_OV", 0);
     }
+    last_pack_ov_fault = pack_ov_now;
 }
 
 /* ----------------------------------------------------------------

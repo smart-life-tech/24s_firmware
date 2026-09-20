@@ -192,15 +192,10 @@ static void bb_write_record(uint16_t event_type, int32_t current_ma,
 
     xSemaphoreTake(bb_mutex, portMAX_DELAY);
 
+    /* Ring-buffer behavior: once full, overwrite the oldest record rather than
+     * erasing the whole partition and losing the entire fault history. */
     if (bb_hdr.count >= BB_MAX_RECORDS) {
-        uint32_t data_start = BB_RECORD_DATA_OFFSET_DEFAULT;
-        if (bb_partition && bb_partition->erase_size != 0U) {
-            data_start = BB_HEADER_SLOT_COUNT * bb_partition->erase_size;
-        }
-        uint32_t data_end = bb_partition->size;
-        esp_partition_erase_range(bb_partition, data_start, data_end - data_start);
-        bb_hdr.write_idx = 0U;
-        bb_hdr.count = 0U;
+        bb_hdr.count = BB_MAX_RECORDS;
     }
 
     bb_record_t rec = {0};
