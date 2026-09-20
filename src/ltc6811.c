@@ -525,7 +525,11 @@ void cell_monitor_task(void *arg)
                 ESP_LOGE(TAG, "TEMP SHUTDOWN: %.1f°C", avg);
                 black_box_write_temp_alert(0xFF, avg);
                 mqtt_publish_fault("TEMP_SHUTDOWN", 0);
-                /* Graceful gate shutdown */
+                xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+                g_sys.scp_state = SCP_STATE_PERMANENT_FAULT;
+                g_sys.fault_active = true;
+                g_sys.gate_state = GATE_OFF;
+                xSemaphoreGive(g_state_mutex);
                 gpio_set_level(PIN_GATE_CTRL, 0);
             } else if (avg >= TEMP_WARN_C) {
                 ESP_LOGW(TAG, "Temp warning: %.1f°C", avg);

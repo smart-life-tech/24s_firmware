@@ -5,36 +5,19 @@
 
 ## 1. DEVELOPMENT ENVIRONMENT SETUP
 
-### 1.1 Install ESP-IDF (v5.2 recommended)
+### 1.1 Install PlatformIO
 
-**Windows (PowerShell as Administrator):**
-```powershell
-winget install Git.Git Python.Python.3.11
-git clone --recursive https://github.com/espressif/esp-idf.git C:\esp\esp-idf
-cd C:\esp\esp-idf
-git checkout v5.2
-.\install.ps1 esp32s2
-# Add to PATH:
-. C:\esp\esp-idf\export.ps1
-```
-
-**Linux / macOS:**
+**Windows, Linux, or macOS:**
 ```bash
-sudo apt install git cmake ninja-build python3 python3-pip   # Ubuntu
-# macOS: brew install cmake ninja python3
-
-git clone --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-cd ~/esp/esp-idf
-git checkout v5.2
-./install.sh esp32s2
-source export.sh   # add to ~/.bashrc for persistence
+python -m pip install platformio
 ```
 
-**Verify:**
+Then verify the CLI is available:
 ```bash
-idf.py --version
-# Should print: ESP-IDF v5.2.x
+platformio --version
 ```
+
+The project is configured to be built and flashed as a PlatformIO ESP-IDF project. This is the supported workflow for the supplied firmware package.
 
 ---
 
@@ -70,83 +53,57 @@ Use **CP2102**, **CH340**, or **FTDI FT232** adapter at 115200 baud.
 
 ---
 
-## 3. PROJECT BUILD
+## 3. PROJECT BUILD (PRIMARY WORKFLOW: PlatformIO)
+
+This package is intended to be built and flashed via PlatformIO using the ESP-IDF framework. This is the supported workflow for the supplied project layout.
 
 ```bash
 cd 24s_firmware
-
-# Set target (only needed once)
-idf.py set-target esp32s2
-
-# Edit device ID before building (or set in sdkconfig):
-# Open sdkconfig.defaults and change:
-#   CONFIG_DEVICE_ID="24S-HUB-001"    ← unique per unit
-#   CONFIG_MQTT_BROKER_URI="mqtt://your-broker:1883"
-
-# Build
-idf.py build
+platformio run
+platformio run --target upload
+platformio device monitor
 ```
 
-Build output location: `build/24s_smart_hub.bin`
+### PlatformIO build outputs
+PlatformIO places binaries under `.pio/build/<environment>/firmware.bin` and the project uses the custom partition table at [partitions.csv](partitions.csv).
+
+> The raw `idf.py` flow is not the preferred path for this package because the project is organized as a PlatformIO ESP-IDF project, not a raw `main/` ESP-IDF app tree.
 
 ---
 
 ## 4. FLASHING
 
-### 4.1 Full flash (first time — includes bootloader + partition table + app)
+### 4.1 Build and upload the current firmware
 ```bash
-idf.py -p /dev/ttyUSB0 flash    # Linux
-idf.py -p COM5 flash             # Windows
-idf.py -p /dev/cu.usbmodem* flash  # macOS
+platformio run --target upload
 ```
 
-### 4.2 App only (faster for iterative development)
+### 4.2 Monitor only
 ```bash
-idf.py -p /dev/ttyUSB0 app-flash
+platformio device monitor
 ```
 
-### 4.3 Flash + open monitor immediately
+### 4.3 Clean build
 ```bash
-idf.py -p /dev/ttyUSB0 flash monitor
+platformio run --target clean
+platformio run
 ```
 
-### 4.4 Monitor only (no flash)
+### 4.4 Erase flash (factory reset)
 ```bash
-idf.py -p /dev/ttyUSB0 monitor
-# Exit: Ctrl+]
-```
-
-### 4.5 Erase all flash (factory reset)
-```bash
-idf.py -p /dev/ttyUSB0 erase-flash
-# Then reflash everything:
-idf.py -p /dev/ttyUSB0 flash
+platformio run --target erase
 ```
 
 ---
 
 ## 5. PROVISIONING A NEW UNIT
 
-Each hub unit requires a unique DeviceID stored in eFuse OTP and in NVS.
+The current firmware does not implement a real eFuse provisioning flow. The deployed unit configuration should be kept in the normal project configuration and NVS storage for the production installation, rather than presenting eFuse programming as part of the shipped firmware behavior.
 
-### 5.1 Write DeviceID to NVS (via provisioning script)
-```python
-# provisioning/provision_unit.py
-# Run after first flash, while connected via USB:
-
-import serial, time
-
-DEVICE_ID = "24S-HUB-001"   # change per unit
-BROKER    = "mqtt://192.168.1.100:1883"
-
-# Uses ESP32 console to write NVS values
-# (Implement as IDF console component or use nvs_partition_gen.py)
-```
-
-### 5.2 Provision the unit metadata
-- The final hardware uses a GPIO4 gate/PWM control path and 4 dedicated NTC channels.
-- Store the unit-specific DeviceID in the project configuration and NVS as required for the deployment.
-- Use the board's normal provisioning workflow for the installed environment; there is no RF keyfob pairing path in the final firmware revision.
+### 5.1 Unit configuration procedure
+- Set the unit-specific DeviceID in the project configuration used by the deployment.
+- Keep the MQTT broker URI and any per-unit deployment settings in the platform build configuration or NVS-backed config.
+- Treat the per-unit identity as a deployment/configuration task, not as an eFuse programming feature in the shipped firmware.
 
 ---
 
@@ -155,20 +112,17 @@ BROKER    = "mqtt://192.168.1.100:1883"
 During normal boot you should see:
 ```
 === 24S Smart Hub Boot Sequence ===
-[1/8] Peripheral init...
+[1/5] Peripheral init...
       GPIO / LEDC / SPI / ADC OK
-[2/8] Loading NVS...
+[2/5] Loading NVS...
       NVS OK
-[3/8] Black Box init...
+[3/5] Black Box init...
       Black Box ready: 0 records stored, next write idx 0
       Boot event logged
-[4/8] LTC6811 self-test...
+[4/5] LTC6811 self-test...
       LTC6811 OK — 24 cells verified
-[5/8] INA240 + gate health check...
+[5/5] INA240 idle check...
       INA240 idle OK
-[6/8] Wi-Fi connect (30s timeout, offline mode if miss)...
-[7/8] MQTT telemetry ready...
-[8/8] System ready — gate remains in configured default state
 === Boot complete — entering main loop ===
 ```
 
@@ -177,7 +131,7 @@ During normal boot you should see:
 |---|---|---|
 | `LTC6811 self-test FAILED` | Cell tap disconnected or isoSPI wiring error | Check the LTC6811 daisy-chain wiring and J1/J2 isolation path |
 | `INA240 idle check FAILED` | Shorted sense path or stuck current fault path | Check the INA240 current-sense path and load wiring |
-| `black_box partition not found` | Partition table mismatch | Verify the custom partitions.csv and reflash using the project partition table |
+| `black_box partition not found` | Partition table mismatch | Verify the custom partitions.csv and rebuild with PlatformIO |
 | `NVS needs erase — reflashing` | NVS version change after firmware update | Normal on major updates — config resets to defaults |
 
 ---
@@ -257,22 +211,10 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 platformio run
 platformio run --target upload
 platformio device monitor
-
-# Alternative ESP-IDF flow when using the raw IDF toolchain:
-idf.py set-target esp32s2
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
-
-# Check component sizes:
-idf.py size-components
-
-# Run on-chip analysis:
-idf.py -p /dev/ttyUSB0 monitor --print_filter="SCP:E,MQTT:I,MAIN:I"
 ```
 
 ### Recommended VS Code extensions:
 - **PlatformIO** (official) — primary project workflow
-- **Espressif IDF** (official) — fallback if using raw ESP-IDF tooling
 - **C/C++** (Microsoft)
 - **CMake Tools**
 
