@@ -6,6 +6,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <stdio.h>
 
 static const char *TAG = "WIFI";

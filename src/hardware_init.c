@@ -10,6 +10,8 @@
 #include "driver/spi_master.h"
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "HW_INIT";
 

@@ -12,8 +12,11 @@
 #include "black_box.h"
 #include "mqtt_telemetry.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <math.h>
 
