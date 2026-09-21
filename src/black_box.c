@@ -246,15 +246,15 @@ static void bb_upload_task(void *arg)
             }
 
             int n = snprintf(json, sizeof(json),
-                "{\"timestamp\":%u,\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
-                "\"pack_voltage_mv\":%u,\"event_type\":\"0x%04X\",\"retry_count\":%u,"
+                "{\"timestamp\":%lu,\"fault_type\":\"%s\",\"peak_current_ma\":%ld,"
+                "\"pack_voltage_mv\":%lu,\"event_type\":\"0x%04X\",\"retry_count\":%lu,"
                 "\"cell_index\":%u,\"sensor_index\":%u}",
-                records[i].timestamp,
+                (unsigned long)records[i].timestamp,
                 bb_event_name(records[i].event_type),
-                records[i].pack_current_ma,
-                records[i].pack_voltage_mv,
-                records[i].event_type,
-                retry_count,
+                (long)records[i].pack_current_ma,
+                (unsigned long)records[i].pack_voltage_mv,
+                (unsigned int)records[i].event_type,
+                (unsigned long)retry_count,
                 cell_index,
                 sensor_index);
 

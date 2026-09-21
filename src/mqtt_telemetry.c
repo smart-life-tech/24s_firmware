@@ -235,21 +235,21 @@ static void publish_telemetry(void)
 
     char payload[640];
     snprintf(payload, sizeof(payload),
-        "{\"device_id\":\"%s\",\"timestamp\":%u,"
-        "\"pack_voltage_mv\":%u,\"pack_current_ma\":%d,"
+        "{\"device_id\":\"%s\",\"timestamp\":%lu,"
+        "\"pack_voltage_mv\":%lu,\"pack_current_ma\":%ld,"
         "\"soc_percent\":%.1f,\"temp_avg_c\":%.1f,"
         "\"temp_sensors_c\":[%.1f,%.1f,%.1f,%.1f],"
         "\"gate_state\":\"%s\",\"pwm_duty_percent\":%u,"
-        "\"fault_active\":%s,\"retry_count\":%u,\"wifi_rssi\":%d,"
+        "\"fault_active\":%s,\"retry_count\":%lu,\"wifi_rssi\":%d,"
         "\"chemistry\":\"%s\"}",
-        CONFIG_DEVICE_ID, (uint32_t)time(NULL),
-        snap.pack_voltage_mv, snap.pack_current_ma,
+        CONFIG_DEVICE_ID, (unsigned long)time(NULL),
+        (unsigned long)snap.pack_voltage_mv, (long)snap.pack_current_ma,
         soc_10 / 10.0f, snap.temp_avg_c,
         snap.temp_sensors_c[0], snap.temp_sensors_c[1],
         snap.temp_sensors_c[2], snap.temp_sensors_c[3],
         gate_str, snap.pwm_duty_pct,
         snap.fault_active ? "true" : "false",
-        snap.retry_count, snap.wifi_rssi,
+        (unsigned long)snap.retry_count, snap.wifi_rssi,
         chemistry_name(snap.chemistry));
 
     char topic[64];
@@ -317,11 +317,11 @@ void mqtt_publish_fault(const char *fault_type, int32_t peak_current)
 
     char payload[320];
     snprintf(payload, sizeof(payload),
-        "{\"device_id\":\"%s\",\"timestamp\":%u,"
-        "\"fault_type\":\"%s\",\"peak_current_ma\":%d,"
-        "\"pack_voltage_mv\":%u,\"retry_count\":%u}",
-        CONFIG_DEVICE_ID, (uint32_t)time(NULL), fault_type,
-        peak_current, pack_v, retry);
+        "{\"device_id\":\"%s\",\"timestamp\":%lu,"
+        "\"fault_type\":\"%s\",\"peak_current_ma\":%ld,"
+        "\"pack_voltage_mv\":%lu,\"retry_count\":%lu}",
+        CONFIG_DEVICE_ID, (unsigned long)time(NULL), fault_type,
+        (long)peak_current, (unsigned long)pack_v, (unsigned long)retry);
 
     char topic[64];
     make_topic(topic, sizeof(topic), "faults");
@@ -339,10 +339,11 @@ void mqtt_publish_recovery_eta(uint32_t eta_seconds)
 
     char payload[320];
     snprintf(payload, sizeof(payload),
-        "{\"device_id\":\"%s\",\"timestamp\":%u,"
+        "{\"device_id\":\"%s\",\"timestamp\":%lu,"
         "\"fault_type\":\"SCP_RECOVERY\",\"peak_current_ma\":0,"
-        "\"pack_voltage_mv\":%u,\"retry_count\":%u,\"recovery_eta_s\":%u}",
-        CONFIG_DEVICE_ID, (uint32_t)time(NULL), pack_v, retry, eta_seconds);
+        "\"pack_voltage_mv\":%lu,\"retry_count\":%lu,\"recovery_eta_s\":%u}",
+        CONFIG_DEVICE_ID, (unsigned long)time(NULL), (unsigned long)pack_v,
+        (unsigned long)retry, eta_seconds);
 
     char topic[64];
     make_topic(topic, sizeof(topic), "faults");
