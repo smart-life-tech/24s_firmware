@@ -16,11 +16,11 @@ static bool g_wifi_started = false;
 static bool g_sntp_started = false;
 
 #ifndef CONFIG_WIFI_SSID
-#define CONFIG_WIFI_SSID "SMARTHUB"
+#define CONFIG_WIFI_SSID "TECNO SPARK 5 Air"
 #endif
 
 #ifndef CONFIG_WIFI_PASSWORD
-#define CONFIG_WIFI_PASSWORD "smart-hub"
+#define CONFIG_WIFI_PASSWORD "1234567890"
 #endif
 
 static void start_sntp_once(void)
