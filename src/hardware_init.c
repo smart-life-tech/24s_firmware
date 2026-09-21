@@ -115,7 +115,7 @@ static esp_err_t init_spi(void)
 
 static esp_err_t init_adc(void)
 {
-    esp_err_t err = adc1_config_width(ADC_WIDTH_BIT_13);
+    esp_err_t err = adc1_config_width(ADC_WIDTH_BIT_12);
     if (err != ESP_OK) return err;
     err = adc1_config_channel_atten(PIN_NTC_1, ADC_ATTEN_DB_11);
     if (err != ESP_OK) return err;
