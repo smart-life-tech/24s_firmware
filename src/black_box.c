@@ -248,15 +248,15 @@ static void bb_upload_task(void *arg)
             int n = snprintf(json, sizeof(json),
                 "{\"timestamp\":%lu,\"fault_type\":\"%s\",\"peak_current_ma\":%ld,"
                 "\"pack_voltage_mv\":%lu,\"event_type\":\"0x%04X\",\"retry_count\":%lu,"
-                "\"cell_index\":%u,\"sensor_index\":%u}",
+                "\"cell_index\":%lu,\"sensor_index\":%lu}",
                 (unsigned long)records[i].timestamp,
                 bb_event_name(records[i].event_type),
                 (long)records[i].pack_current_ma,
                 (unsigned long)records[i].pack_voltage_mv,
                 (unsigned int)records[i].event_type,
                 (unsigned long)retry_count,
-                cell_index,
-                sensor_index);
+                (unsigned long)cell_index,
+                (unsigned long)sensor_index);
 
             if (n <= 0 || !bb_publish_fn(topic, json)) {
                 upload_ok = false;

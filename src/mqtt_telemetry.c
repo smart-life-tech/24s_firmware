@@ -239,7 +239,7 @@ static void publish_telemetry(void)
         "\"pack_voltage_mv\":%lu,\"pack_current_ma\":%ld,"
         "\"soc_percent\":%.1f,\"temp_avg_c\":%.1f,"
         "\"temp_sensors_c\":[%.1f,%.1f,%.1f,%.1f],"
-        "\"gate_state\":\"%s\",\"pwm_duty_percent\":%u,"
+        "\"gate_state\":\"%s\",\"pwm_duty_percent\":%lu,"
         "\"fault_active\":%s,\"retry_count\":%lu,\"wifi_rssi\":%d,"
         "\"chemistry\":\"%s\"}",
         CONFIG_DEVICE_ID, (unsigned long)time(NULL),
@@ -247,7 +247,7 @@ static void publish_telemetry(void)
         soc_10 / 10.0f, snap.temp_avg_c,
         snap.temp_sensors_c[0], snap.temp_sensors_c[1],
         snap.temp_sensors_c[2], snap.temp_sensors_c[3],
-        gate_str, snap.pwm_duty_pct,
+        gate_str, (unsigned long)snap.pwm_duty_pct,
         snap.fault_active ? "true" : "false",
         (unsigned long)snap.retry_count, snap.wifi_rssi,
         chemistry_name(snap.chemistry));
@@ -295,10 +295,10 @@ static void publish_cells(void)
 
     char payload[600];
     snprintf(payload, sizeof(payload),
-        "{\"device_id\":\"%s\",\"timestamp\":%u,\"cells_mv\":%s,"
+        "{\"device_id\":\"%s\",\"timestamp\":%lu,\"cells_mv\":%s,"
         "\"cell_min_mv\":%u,\"cell_max_mv\":%u,\"cell_delta_mv\":%u,"
         "\"balancing\":%s}",
-        CONFIG_DEVICE_ID, (uint32_t)time(NULL), cells_str,
+        CONFIG_DEVICE_ID, (unsigned long)time(NULL), cells_str,
         min_mv, max_mv, (uint16_t)(max_mv - min_mv), bal_str);
 
     char topic[64];
@@ -341,9 +341,9 @@ void mqtt_publish_recovery_eta(uint32_t eta_seconds)
     snprintf(payload, sizeof(payload),
         "{\"device_id\":\"%s\",\"timestamp\":%lu,"
         "\"fault_type\":\"SCP_RECOVERY\",\"peak_current_ma\":0,"
-        "\"pack_voltage_mv\":%lu,\"retry_count\":%lu,\"recovery_eta_s\":%u}",
+        "\"pack_voltage_mv\":%lu,\"retry_count\":%lu,\"recovery_eta_s\":%lu}",
         CONFIG_DEVICE_ID, (unsigned long)time(NULL), (unsigned long)pack_v,
-        (unsigned long)retry, eta_seconds);
+        (unsigned long)retry, (unsigned long)eta_seconds);
 
     char topic[64];
     make_topic(topic, sizeof(topic), "faults");
