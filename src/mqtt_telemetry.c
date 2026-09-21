@@ -32,7 +32,7 @@ static const char *TAG = "MQTT";
 #endif
 
 #ifndef CONFIG_MQTT_BROKER_URI
-#define CONFIG_MQTT_BROKER_URI "mqtt://192.168.1.100:1883"
+#define CONFIG_MQTT_BROKER_URI "mqtt://10.208.47.228:1883"
 #endif
 
 static esp_mqtt_client_handle_t mqtt_client = NULL;
