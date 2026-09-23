@@ -115,7 +115,7 @@ static esp_err_t init_spi(void)
 
 static esp_err_t init_adc(void)
 {
-    esp_err_t err = adc1_config_width(ADC_WIDTH_BIT_12);
+    esp_err_t err = adc1_config_width(ADC_WIDTH_BIT_13);
     if (err != ESP_OK) return err;
     err = adc1_config_channel_atten(PIN_NTC_1, ADC_ATTEN_DB_11);
     if (err != ESP_OK) return err;
@@ -131,7 +131,7 @@ static esp_err_t init_adc(void)
     /* esp_adc_cal_characterize() returns a calibration source enum, not ESP_OK.
      * The call is valid for ESP32-S2 ADC calibration and should not be treated as an error code. */
     (void)esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11,
-                                    ADC_WIDTH_BIT_12, 1100, &g_adc_chars);
+                                    ADC_WIDTH_BIT_13, 1100, &g_adc_chars);
     ESP_LOGI(TAG, "ADC initialized");
     return ESP_OK;
 }
