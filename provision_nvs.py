@@ -10,11 +10,9 @@ production firmware expects in the "24shub" namespace:
   - wifi_pass
   - mqtt_uri
 
-Usage:
-    python provision_nvs.py --device-id 24S-HUB-002 \\
-        --wifi-ssid "MyNetwork" --wifi-pass "MyPassword" \\
-        --mqtt-uri "mqtt://192.168.1.50:1883" \\
-        --out nvs_unit002.bin
+Usage (PowerShell, cmd, or Bash — one line, or use your shell's own
+line-continuation character: ` for PowerShell, ^ for cmd, \ for Bash):
+    python provision_nvs.py --device-id 24S-HUB-002 --wifi-ssid "MyNetwork" --wifi-pass "MyPassword" --mqtt-uri "mqtt://192.168.1.50:1883" --out nvs_unit002.bin
 
 This produces a binary NVS image sized to match the "nvs" partition
 (0x6000 bytes at offset 0x9000, see partitions.csv). Flash it with:
