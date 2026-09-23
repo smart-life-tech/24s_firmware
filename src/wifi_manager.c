@@ -107,15 +107,11 @@ esp_err_t wifi_manager_start(void)
     if (err != ESP_OK) return err;
 
     wifi_config_t wifi_cfg = {0};
-    char ssid[33] = {0};
-    char pass[65] = {0};
-    if (!load_wifi_credentials(ssid, sizeof(ssid), pass, sizeof(pass))) {
+    if (!load_wifi_credentials((char *)wifi_cfg.sta.ssid, sizeof(wifi_cfg.sta.ssid),
+                                (char *)wifi_cfg.sta.password, sizeof(wifi_cfg.sta.password))) {
         ESP_LOGE(TAG, "Wi-Fi credentials not provisioned in NVS (keys 'wifi_ssid'/'wifi_pass')");
         return ESP_ERR_NVS_NOT_FOUND;
     }
-    snprintf((char *)wifi_cfg.sta.ssid, sizeof(wifi_cfg.sta.ssid), "%s", ssid);
-    snprintf((char *)wifi_cfg.sta.password, sizeof(wifi_cfg.sta.password), "%s", pass);
-    memset(pass, 0, sizeof(pass));
     wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     err = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -127,7 +123,7 @@ esp_err_t wifi_manager_start(void)
 
     g_wifi_started = true;
     /* Never log the password, and avoid logging the full SSID in production. */
-    ESP_LOGI(TAG, "Wi-Fi manager initialized (SSID %.2s***)", ssid);
+    ESP_LOGI(TAG, "Wi-Fi manager initialized (SSID %.2s***)", (const char *)wifi_cfg.sta.ssid);
     return ESP_OK;
 }
 
