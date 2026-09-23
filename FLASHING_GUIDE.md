@@ -97,9 +97,6 @@ platformio run --target erase
 ---
 
 ## 5. PROVISIONING A NEW UNIT
-
-The current firmware does not implement a real eFuse provisioning flow. The deployed unit configuration should be kept in the normal project configuration and NVS storage for the production installation, rather than presenting eFuse programming as part of the shipped firmware behavior.
-
 ### 5.1 Unit configuration procedure
 - Set the unit-specific DeviceID in the project configuration used by the deployment.
 - Keep the MQTT broker URI and any per-unit deployment settings in the platform build configuration or NVS-backed config.
@@ -230,6 +227,3 @@ platformio device monitor
 | M2D | PWA Dashboard | Separate deliverable |
 
 ---
-
-*Architecture: Syncro Pakistan — Milestone 2 Firmware v1.0*
-*Target: ESP32-S2-WROVER-I | ESP-IDF 5.5.3 | FreeRTOS*
