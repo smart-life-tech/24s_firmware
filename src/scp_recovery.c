@@ -199,7 +199,7 @@ void scp_recovery_task(void *arg)
             xSemaphoreGive(g_state_mutex);
 
             /* Probe only if an output had previously been requested. */
-            if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM_50) {
+            if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM) {
                 gate_enable_pwm(5U);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 int32_t probe_current = ina240_read_current_ma();
@@ -236,7 +236,7 @@ void scp_recovery_task(void *arg)
 
             if (restore_mode == MODE_FULL_POWER) {
                 gate_enable_full();
-            } else if (restore_mode == MODE_PWM_50) {
+            } else if (restore_mode == MODE_PWM) {
                 gate_enable_pwm(restore_duty);
             } else {
                 gate_disable();
@@ -293,7 +293,7 @@ void scp_recovery_enable_gate(void)
     xSemaphoreGive(g_state_mutex);
 
     if (mode == MODE_FULL_POWER) gate_enable_full();
-    else if (mode == MODE_PWM_50) gate_enable_pwm(duty);
+    else if (mode == MODE_PWM) gate_enable_pwm(duty);
     else gate_disable();
 }
 

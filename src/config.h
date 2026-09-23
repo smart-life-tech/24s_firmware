@@ -12,6 +12,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+/* Compiled-in fallback only; production units provision "device_id" into the
+ * 24shub NVS namespace so one firmware.bin serves every unit. */
+#ifndef CONFIG_DEVICE_ID
+#define CONFIG_DEVICE_ID "24S-HUB-001"
+#endif
+#define DEVICE_ID_MAX_LEN   32U
+extern char g_device_id[DEVICE_ID_MAX_LEN];
+
 /* ================================================================
  *  GPIO pin map (ESP32-S2)
  * ================================================================ */
@@ -110,7 +118,7 @@ typedef enum {
 typedef enum {
     MODE_OFF = 0,
     MODE_FULL_POWER,
-    MODE_PWM_50
+    MODE_PWM
 } op_mode_t;
 
 typedef enum {

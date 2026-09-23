@@ -27,10 +27,6 @@
 
 static const char *TAG = "MQTT";
 
-#ifndef CONFIG_DEVICE_ID
-#define CONFIG_DEVICE_ID "24S-HUB-001"
-#endif
-
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static char g_broker_uri[64] = {0};
 static bool mqtt_connected = false;
@@ -41,7 +37,7 @@ static void publish_telemetry(void);
 
 static void make_topic(char *buf, size_t len, const char *suffix)
 {
-    snprintf(buf, len, "hub/%s/%s", CONFIG_DEVICE_ID, suffix);
+    snprintf(buf, len, "hub/%s/%s", g_device_id, suffix);
 }
 
 static const char *chemistry_name(cell_chemistry_t chemistry)
@@ -239,7 +235,7 @@ static void publish_telemetry(void)
         "\"gate_state\":\"%s\",\"pwm_duty_percent\":%lu,"
         "\"fault_active\":%s,\"retry_count\":%lu,\"wifi_rssi\":%d,"
         "\"chemistry\":\"%s\"}",
-        CONFIG_DEVICE_ID, (unsigned long)time(NULL),
+        g_device_id, (unsigned long)time(NULL),
         (unsigned long)snap.pack_voltage_mv, (long)snap.pack_current_ma,
         soc_10 / 10.0f, snap.temp_avg_c,
         snap.temp_sensors_c[0], snap.temp_sensors_c[1],
@@ -295,7 +291,7 @@ static void publish_cells(void)
         "{\"device_id\":\"%s\",\"timestamp\":%lu,\"cells_mv\":%s,"
         "\"cell_min_mv\":%u,\"cell_max_mv\":%u,\"cell_delta_mv\":%u,"
         "\"balancing\":%s}",
-        CONFIG_DEVICE_ID, (unsigned long)time(NULL), cells_str,
+        g_device_id, (unsigned long)time(NULL), cells_str,
         min_mv, max_mv, (uint16_t)(max_mv - min_mv), bal_str);
 
     char topic[64];
@@ -317,7 +313,7 @@ void mqtt_publish_fault(const char *fault_type, int32_t peak_current)
         "{\"device_id\":\"%s\",\"timestamp\":%lu,"
         "\"fault_type\":\"%s\",\"peak_current_ma\":%ld,"
         "\"pack_voltage_mv\":%lu,\"retry_count\":%lu}",
-        CONFIG_DEVICE_ID, (unsigned long)time(NULL), fault_type,
+        g_device_id, (unsigned long)time(NULL), fault_type,
         (long)peak_current, (unsigned long)pack_v, (unsigned long)retry);
 
     char topic[64];
@@ -339,7 +335,7 @@ void mqtt_publish_recovery_eta(uint32_t eta_seconds)
         "{\"device_id\":\"%s\",\"timestamp\":%lu,"
         "\"fault_type\":\"SCP_RECOVERY\",\"peak_current_ma\":0,"
         "\"pack_voltage_mv\":%lu,\"retry_count\":%lu,\"recovery_eta_s\":%lu}",
-        CONFIG_DEVICE_ID, (unsigned long)time(NULL), (unsigned long)pack_v,
+        g_device_id, (unsigned long)time(NULL), (unsigned long)pack_v,
         (unsigned long)retry, (unsigned long)eta_seconds);
 
     char topic[64];
@@ -382,7 +378,7 @@ static esp_err_t mqtt_start(void)
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = g_broker_uri,
-        .credentials.client_id = CONFIG_DEVICE_ID,
+        .credentials.client_id = g_device_id,
     };
 
     mqtt_client = esp_mqtt_client_init(&cfg);

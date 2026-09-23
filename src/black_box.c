@@ -22,10 +22,6 @@
 
 static const char *TAG = "BLACK_BOX";
 
-#ifndef CONFIG_DEVICE_ID
-#define CONFIG_DEVICE_ID "24S-HUB-001"
-#endif
-
 #define BB_PARTITION_LABEL          "black_box"
 #define BB_MAX_RECORDS              500U
 #define BB_RECORD_SIZE              64U
@@ -222,7 +218,7 @@ static void bb_upload_task(void *arg)
         }
 
         char topic[64];
-        snprintf(topic, sizeof(topic), "hub/%s/blackbox", CONFIG_DEVICE_ID);
+        snprintf(topic, sizeof(topic), "hub/%s/blackbox", g_device_id);
         bool upload_ok = true;
 
         for (uint32_t i = 0; i < count; i++) {

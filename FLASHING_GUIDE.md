@@ -96,11 +96,31 @@ platformio run --target erase
 
 ---
 
-## 5. PROVISIONING A NEW UNIT
-### 5.1 Unit configuration procedure
-- Set the unit-specific DeviceID in the project configuration used by the deployment.
-- Keep the MQTT broker URI and any per-unit deployment settings in the platform build configuration or NVS-backed config.
-- Treat the per-unit identity as a deployment/configuration task, not as an eFuse programming feature in the shipped firmware.
+## 5. PRODUCTION PROVISIONING
+
+The production firmware does not contain Wi-Fi credentials or a
+deployment-specific MQTT broker address.
+
+Before a unit is deployed, the following values must be provisioned
+into the `24shub` NVS namespace:
+
+- `device_id`
+- `wifi_ssid`
+- `wifi_pass`
+- `mqtt_uri`
+
+These values are unit/deployment specific and are not compiled into
+the production firmware image. If `device_id` is not provisioned, the
+firmware falls back to the compiled-in default (`24S-HUB-001`); Wi-Fi
+and MQTT startup are refused until their values are provisioned.
+
+The same production firmware binary may therefore be used for
+multiple SmartHub units.
+
+### 5.1 Provisioning a unit
+A `provision_nvs.py` script is included in the project root to write these
+four keys into the `nvs` partition image (or over a live serial connection
+via `esptool.py`/`nvs_partition_gen.py`). See the script header for usage.
 
 ---
 
@@ -152,8 +172,11 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/gate" -m '{"action":"ON"}'
 mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/pwm"  -m '{"duty":75}'
 mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/reset_fault" -m '{"confirm":true}'
 mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
-  -m '{"ov_mv":3650,"uv_mv":2500,"oc_ma":40000,"bal_delta_mv":30}'
+  -m '{"ov_mv":3650,"uv_mv":2500,"oc_ma":20000,"bal_delta_mv":30}'
 ```
+
+> **Note:** The production firmware limits the software over-current threshold
+> to 20 A (20,000 mA). Values above this limit are rejected.
 
 ### 7.2 Expected telemetry (every 5 seconds on hub/{id}/telemetry):
 ```json

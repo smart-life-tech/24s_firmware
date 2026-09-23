@@ -11,6 +11,8 @@
 #define NVS_NS "24shub"
 static const char *TAG = "CONFIG";
 
+char g_device_id[DEVICE_ID_MAX_LEN] = CONFIG_DEVICE_ID;
+
 static uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi, uint32_t fallback)
 {
     if (v < lo || v > hi) return fallback;
@@ -29,6 +31,11 @@ void config_load_from_nvs(void)
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
+    }
+
+    size_t id_len = sizeof(g_device_id);
+    if (nvs_get_str(h, "device_id", g_device_id, &id_len) != ESP_OK) {
+        ESP_LOGW(TAG, "device_id not provisioned in NVS; using compiled default '%s'", g_device_id);
     }
 
     uint32_t v = 0U;

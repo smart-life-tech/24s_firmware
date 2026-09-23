@@ -77,7 +77,7 @@ static void apply_mode(op_mode_t mode, uint32_t duty_pct)
         ESP_LOGI(TAG, "Mode → FULL POWER");
         break;
 
-    case MODE_PWM_50:
+    case MODE_PWM:
         pwm_set_duty(duty_pct);
         ESP_LOGI(TAG, "Mode → PWM %d%%", duty_pct);
         break;
@@ -117,7 +117,7 @@ void third_wire_task(void *arg)
         if (!g_sys.boot_complete || output_inhibited()) {
             continue;
         }
-        if (g_sys.op_mode == MODE_PWM_50 && !g_sys.pwm_remote_override) {
+        if (g_sys.op_mode == MODE_PWM && !g_sys.pwm_remote_override) {
             pwm_apply_pot();
         }
     }
@@ -141,7 +141,7 @@ void third_wire_set_mode_from_mqtt(const char *action)
         g_sys.pwm_remote_override = false;
         xSemaphoreGive(g_state_mutex);
     } else if (strcmp(action, "PWM") == 0) {
-        mode = MODE_PWM_50;
+        mode = MODE_PWM;
         if (duty == 0U) duty = 50U;
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
         g_sys.pwm_remote_override = true;
@@ -160,9 +160,9 @@ void third_wire_set_pwm_duty(uint32_t duty_pct)
 {
     if (duty_pct > 100U) duty_pct = 100U;
 
-    /* Preserve the PWA-facing mode semantics as PWM_50 even when the hardware output is effectively full-scale,
+    /* Preserve the PWA-facing mode semantics as PWM even when the hardware output is effectively full-scale,
      * while still driving the gate with the requested duty. */
-    op_mode_t mode = (duty_pct == 0U) ? MODE_OFF : MODE_PWM_50;
+    op_mode_t mode = (duty_pct == 0U) ? MODE_OFF : MODE_PWM;
 
     apply_mode(mode, duty_pct);
 
