@@ -31,11 +31,8 @@ static const char *TAG = "MQTT";
 #define CONFIG_DEVICE_ID "24S-HUB-001"
 #endif
 
-#ifndef CONFIG_MQTT_BROKER_URI
-#define CONFIG_MQTT_BROKER_URI "mqtt://10.208.47.228:1883"
-#endif
-
 static esp_mqtt_client_handle_t mqtt_client = NULL;
+static char g_broker_uri[64] = {0};
 static bool mqtt_connected = false;
 static EventGroupHandle_t mqtt_evt_grp = NULL;
 #define MQTT_CONNECTED_BIT BIT0
@@ -57,7 +54,7 @@ static bool valid_config_ranges(uint32_t ov, uint32_t uv, uint32_t oc, uint32_t 
     if (ov < 2000U || ov > 5000U) return false;
     if (uv < 1500U || uv > 4000U) return false;
     if (uv >= ov) return false;
-    if (oc < 1000U || oc > 100000U) return false;
+    if (oc < OC_MA_MIN || oc > OC_MA_MAX) return false;
     if (bal < 5U || bal > 500U) return false;
     return true;
 }
@@ -365,10 +362,26 @@ bool mqtt_publish_raw(const char *topic, const char *payload)
     return msg_id >= 0;
 }
 
+static bool load_broker_uri_from_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("24shub", NVS_READONLY, &h) != ESP_OK) return false;
+
+    size_t len = sizeof(g_broker_uri);
+    esp_err_t err = nvs_get_str(h, "mqtt_uri", g_broker_uri, &len);
+    nvs_close(h);
+    return err == ESP_OK && g_broker_uri[0] != '\0';
+}
+
 static esp_err_t mqtt_start(void)
 {
+    if (!load_broker_uri_from_nvs()) {
+        ESP_LOGE(TAG, "MQTT broker URI not provisioned in NVS (key 'mqtt_uri')");
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+
     esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = CONFIG_MQTT_BROKER_URI,
+        .broker.address.uri = g_broker_uri,
         .credentials.client_id = CONFIG_DEVICE_ID,
     };
 

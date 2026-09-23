@@ -5,23 +5,33 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_sntp.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 static const char *TAG = "WIFI";
 static bool g_wifi_started = false;
 static bool g_sntp_started = false;
 
-#ifndef CONFIG_WIFI_SSID
-#define CONFIG_WIFI_SSID "TECNO SPARK 5 Air"
-#endif
+/* Wi-Fi credentials are provisioned into NVS ('24shub' namespace, keys
+ * 'wifi_ssid'/'wifi_pass') rather than compiled in; never log the password. */
+static bool load_wifi_credentials(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
+{
+    nvs_handle_t h;
+    if (nvs_open("24shub", NVS_READONLY, &h) != ESP_OK) return false;
 
-#ifndef CONFIG_WIFI_PASSWORD
-#define CONFIG_WIFI_PASSWORD "1234567890"
-#endif
+    size_t s_len = ssid_len;
+    size_t p_len = pass_len;
+    esp_err_t s_err = nvs_get_str(h, "wifi_ssid", ssid, &s_len);
+    esp_err_t p_err = nvs_get_str(h, "wifi_pass", pass, &p_len);
+    nvs_close(h);
+
+    return s_err == ESP_OK && p_err == ESP_OK && ssid[0] != '\0';
+}
 
 static void start_sntp_once(void)
 {
@@ -97,8 +107,15 @@ esp_err_t wifi_manager_start(void)
     if (err != ESP_OK) return err;
 
     wifi_config_t wifi_cfg = {0};
-    snprintf((char *)wifi_cfg.sta.ssid, sizeof(wifi_cfg.sta.ssid), "%s", CONFIG_WIFI_SSID);
-    snprintf((char *)wifi_cfg.sta.password, sizeof(wifi_cfg.sta.password), "%s", CONFIG_WIFI_PASSWORD);
+    char ssid[33] = {0};
+    char pass[65] = {0};
+    if (!load_wifi_credentials(ssid, sizeof(ssid), pass, sizeof(pass))) {
+        ESP_LOGE(TAG, "Wi-Fi credentials not provisioned in NVS (keys 'wifi_ssid'/'wifi_pass')");
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+    snprintf((char *)wifi_cfg.sta.ssid, sizeof(wifi_cfg.sta.ssid), "%s", ssid);
+    snprintf((char *)wifi_cfg.sta.password, sizeof(wifi_cfg.sta.password), "%s", pass);
+    memset(pass, 0, sizeof(pass));
     wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     err = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -109,7 +126,8 @@ esp_err_t wifi_manager_start(void)
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
 
     g_wifi_started = true;
-    ESP_LOGI(TAG, "Wi-Fi manager initialized for SSID %s", CONFIG_WIFI_SSID);
+    /* Never log the password, and avoid logging the full SSID in production. */
+    ESP_LOGI(TAG, "Wi-Fi manager initialized (SSID %.2s***)", ssid);
     return ESP_OK;
 }
 

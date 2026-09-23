@@ -280,6 +280,12 @@ esp_err_t ltc6811_self_test(void)
  *  3.3 kΩ gate resistor, and each MOSFET discharges its cell through a
  *  100 Ω resistor. The firmware therefore controls the DCC bits in the
  *  LTC6811 configuration register rather than toggling GPIOs.
+ *
+ *  Balancing current is fixed by the 100 Ω bleed resistor: at a typical
+ *  3.65 V cell (LiFePO4 OV threshold) this is ~36.5 mA. This is passive
+ *  balancing only; any requirement for ~1 A of balancing current cannot
+ *  be met by firmware changes on the final PCB and would require a
+ *  hardware redesign (lower bleed resistance and/or active balancing).
  * ---------------------------------------------------------------- */
 static uint16_t g_balance_mask_u19 = 0U;
 static uint16_t g_balance_mask_u23 = 0U;

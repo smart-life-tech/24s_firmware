@@ -37,7 +37,7 @@ void config_load_from_nvs(void)
     if (nvs_get_u32(h, "uv_mv", &v) == ESP_OK)
         g_sys.uv_mv = clamp_u32(v, 1500U, 4000U, UV_MV_LIFEPO4);
     if (nvs_get_u32(h, "oc_ma", &v) == ESP_OK)
-        g_sys.oc_ma = clamp_u32(v, 1000U, 100000U, OC_MA_DEFAULT);
+        g_sys.oc_ma = clamp_u32(v, OC_MA_MIN, OC_MA_MAX, OC_MA_DEFAULT);
     if (nvs_get_u32(h, "bal_mv", &v) == ESP_OK)
         g_sys.bal_delta_mv = clamp_u32(v, 5U, 500U, BAL_DELTA_MV);
     if (nvs_get_u32(h, "duty", &v) == ESP_OK)

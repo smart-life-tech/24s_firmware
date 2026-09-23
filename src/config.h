@@ -73,10 +73,13 @@ typedef enum {
 
 #define TEMP_WARN_C         60
 #define TEMP_SHUTDOWN_C     80
-/* Hardware comparator trips at approximately 21.2 A. The software threshold is intentionally
- * set higher at 40 A so the hardware protection remains the first layer and the software
- * threshold is a secondary safeguard. */
-#define OC_MA_DEFAULT       40000
+#define OC_MA_DEFAULT       20000U
+#define OC_MA_MIN           1000U
+#define OC_MA_MAX           20000U
+
+/* Passive balancing on the final PCB discharges each cell through a 100 Ω
+ * bleed resistor, giving ~36.5 mA at 3.65 V per cell. Balancing current is
+ * fixed by this resistor value and cannot be increased in firmware. */
 
 /* ================================================================
  *  Timing constants
