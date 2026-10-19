@@ -9,6 +9,7 @@
 
 #include "pwm_mode.h"
 #include "config.h"
+#include "third_wire.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
 #include "driver/adc.h"         
@@ -23,13 +24,13 @@ extern esp_adc_cal_characteristics_t g_adc_chars;
 
 /**
  * Set duty cycle 0-100%.
- * Uses the ESP32-S2 LEDC 11-bit timer: max counts = 2047.
+ * Uses the ESP32-S3 LEDC 11-bit timer: max counts = 2047.
  */
 void pwm_set_duty(uint32_t duty_pct)
 {
     if (duty_pct > 100) duty_pct = 100;
 
-    /* 11-bit maximum at 20 kHz with the ESP32-S2 80 MHz APB clock: 2047 counts */
+    /* 11-bit maximum at 20 kHz: 2047 counts */
     uint32_t duty_counts = (duty_pct * LEDC_DUTY_MAX) / 100UL;
 
     ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty_counts);
@@ -100,15 +101,12 @@ void pwm_apply_pot(void)
 {
     uint32_t duty = pot_read_duty_pct();
 
-    pwm_set_duty(duty);
-
-    
     if (xSemaphoreTake(g_state_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         g_sys.pwm_duty_pct = duty;
-        g_sys.gate_state = (duty == 0U) ? GATE_OFF : GATE_PWM;
         xSemaphoreGive(g_state_mutex);
+        third_wire_refresh_output();
     } else {
-        ESP_LOGW(TAG, "pwm_apply_pot: state mutex timeout � "
+        ESP_LOGW(TAG, "pwm_apply_pot: state mutex timeout; "
                       "duty=%u%% applied, g_sys.pwm_duty_pct not updated this cycle",
                  (unsigned)duty);
     }

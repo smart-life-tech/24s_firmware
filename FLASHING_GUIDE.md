@@ -23,11 +23,11 @@ The project is configured to be built and flashed as a PlatformIO ESP-IDF projec
 
 ## 2. HARDWARE CONNECTIONS FOR FLASHING
 
-The ESP32-S2-WROVER-I is flashed via its built-in USB-OTG port **or** via a USB-to-UART bridge on the UART0 pins.
+The ESP32-S3-WROOM-1U-N4R2 is flashed via its native USB Serial/JTAG interface (where routed on the carrier board) **or** via a USB-to-UART bridge on UART0.
 
-### 2.1 USB-OTG Method (recommended — no extra hardware)
-- Connect a USB cable from your PC to the **USB port on the ESP32-S2 module**
-- The S2 has built-in USB-OTG — it enumerates as a CDC serial device
+### 2.1 Native USB Method
+- Connect a USB cable to the carrier-board USB connector routed to ESP32-S3 GPIO19/GPIO20
+- The ESP32-S3 native USB Serial/JTAG interface can enumerate as a serial device
 - No external USB-UART adapter needed
 
 **To enter flash mode:**
@@ -37,7 +37,7 @@ The ESP32-S2-WROVER-I is flashed via its built-in USB-OTG port **or** via a USB-
 4. The device is now in download mode
 
 ### 2.2 UART Method (if using J8 SPI header or UART pins)
-| ESP32-S2 Pin | USB-UART Adapter |
+| ESP32-S3 Pin | USB-UART Adapter |
 |---|---|
 | TXD0 (GPIO43) | RX |
 | RXD0 (GPIO44) | TX |
@@ -48,7 +48,7 @@ Use **CP2102**, **CH340**, or **FTDI FT232** adapter at 115200 baud.
 
 ### 2.3 CRITICAL: Power Isolation During Flashing
 > ⚠️ **DO NOT** connect the full 72V battery stack while flashing.
-> Power the ESP32-S2 ONLY from the USB port (3.3V logic supply via AMS1117-3.3).
+> Power the ESP32-S3 ONLY from the approved isolated/low-voltage programming supply.
 > The gate driver ISO5451DW will remain inactive — all outputs stay at 0V.
 
 ---
@@ -213,7 +213,7 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 │   ├── hardware_init.c     ← GPIO, LEDC, SPI, ADC init
 │   ├── ltc6811.c           ← LTC6811 isoSPI driver + cell monitoring task
 │   ├── scp_recovery.c      ← Hardware SCP + recovery state machine
-│   ├── third_wire.c        ← GPIO4 gate/PWM control path
+│   ├── third_wire.c        ← GPIO47 interlock + centralized GPIO4 gate/PWM arbitration
 │   ├── pwm_mode.c          ← LEDC PWM helpers (20kHz, 11-bit)
 │   ├── black_box.c         ← Offline bounded logger with explicit full-buffer reset policy
 │   ├── mqtt_telemetry.c    ← Bidirectional MQTT JSON telemetry
@@ -221,6 +221,27 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 │   └── *.h                 ← Interface declarations for each module
 └── FLASHING_GUIDE.md       ← Build and flash instructions
 ```
+
+### Third-Wire and mode selector
+
+J9 pin 1 is the Third-Wire signal and pin 2 is the `-VIN` return. Firmware
+configures GPIO47 as a pulled-down input; a stable HIGH for 200 ms requests
+main-output enable, and LOW/open disables the main output. MQTT/app mode
+requests cannot bypass this interlock, and fault handling remains dominant.
+An explicit MQTT/app OFF remains an additional software inhibit; Third-Wire
+HIGH does not override that remote OFF request.
+The main output defaults to a 50% PWM request after boot.
+
+The separate 50%/100% master-switch GPIO is not identified in the supplied
+design files, so its pin remains unassigned in firmware. Do not connect the
+master switch to GPIO47; it is reserved for Third-Wire. Until the separate pin
+is verified and configured, existing MQTT/app mode commands remain the only
+way to change the requested mode. RF remote control is not implemented in
+this firmware package.
+
+GPIO47 is a 3.3 V logic input, not a `-VIN`-tolerant pin. Verify the J9 input
+conditioning, return reference, and fault protection in the schematic before
+connecting an external Third-Wire source or manufacturing the board.
 
 ---
 

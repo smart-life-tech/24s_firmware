@@ -1,7 +1,7 @@
 /**
  * config.h — 24S Smart Hub central configuration
- * Hardware map matches the reconciled PCB: GPIO4 gate/PWM, GPIO39/38 SPI,
- * and four dedicated NTC inputs on GPIO3/7/9/10.
+ * Current ESP32-S3 pin assignments are based on the supplied firmware/netlist
+ * details; verify all module-pad and memory-bus conflicts against the released PCB.
  */
 
 #pragma once
@@ -21,11 +21,12 @@
 extern char g_device_id[DEVICE_ID_MAX_LEN];
 
 /* ================================================================
- *  GPIO pin map (ESP32-S2)
+ *  GPIO pin map (ESP32-S3-WROOM-1U-N4R2)
  * ================================================================ */
 
 #define PIN_GATE_CTRL       GPIO_NUM_4
 #define PIN_FAULT_N         GPIO_NUM_6
+#define PIN_THIRD_WIRE      GPIO_NUM_47
 #define PIN_STATUS_LED      GPIO_NUM_NC /* GPIO7 is dedicated to NTC2 on the final PCB; no software LED is placed on this pin */
 #define PIN_LTC_CS          GPIO_NUM_13
 
@@ -35,7 +36,10 @@ extern char g_device_id[DEVICE_ID_MAX_LEN];
 
 #define PIN_POT_ADC_CH      ADC1_CHANNEL_7   // GPIO8
 #define PIN_POT_ADC_GPIO    GPIO_NUM_8
+/* The master-selector GPIO is not present in the supplied netlist/project.
+ * Keep it unassigned rather than aliasing the independent Third-Wire input. */
 #define MASTER_SWITCH_GPIO  GPIO_NUM_NC
+#define MASTER_SWITCH_HIGH_IS_100PCT 1
 
 #define POT_OVERSAMPLE_N    32
 #define POT_DEADBAND_LOW    410U
@@ -159,6 +163,7 @@ typedef struct {
     uint32_t          soc_percent_x10;
     uint32_t          retry_count;
     bool              pwm_remote_override;
+    bool              third_wire_active;
     bool              fault_active;
     uint32_t          protection_fault_mask;
     uint32_t          ov_mv;

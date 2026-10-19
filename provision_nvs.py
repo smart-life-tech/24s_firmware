@@ -17,7 +17,7 @@ line-continuation character: ` for PowerShell, ^ for cmd, \ for Bash):
 This produces a binary NVS image sized to match the "nvs" partition
 (0x6000 bytes at offset 0x9000, see partitions.csv). Flash it with:
 
-    esptool.py --chip esp32s2 write_flash 0x9000 nvs_unit002.bin
+    esptool.py --chip esp32s3 write_flash 0x9000 nvs_unit002.bin
 
 Requires the ESP-IDF "nvs_partition_gen.py" tool, found at
 $IDF_PATH/components/nvs_flash/nvs_partition_gen/nvs_partition_gen.py.
@@ -85,7 +85,7 @@ def main():
         os.remove(csv_path)
 
     print(f"Wrote {args.out}. Flash with:")
-    print(f"  esptool.py --chip esp32s2 write_flash 0x9000 {args.out}")
+    print(f"  esptool.py --chip esp32s3 write_flash 0x9000 {args.out}")
     return 0
 
 

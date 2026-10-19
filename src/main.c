@@ -1,6 +1,6 @@
 /**
  * 24S Smart Hub — Main Firmware Entry Point
- * ESP32-S2-WROVER-I | Milestone 2
+ * ESP32-S3-WROOM-1U-N4R2 | Milestone 2
  * 
  * Covers:
  *  - Boot & Initialization sequence
@@ -42,6 +42,7 @@ system_state_t g_sys = {
     .wifi_connected   = false,
     .boot_complete    = false,
     .pwm_remote_override = false,
+    .third_wire_active = false,
 };
 
 SemaphoreHandle_t g_state_mutex;

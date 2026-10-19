@@ -1,7 +1,7 @@
-# sdkconfig.defaults — 24S Smart Hub
-# These override idf defaults. Run: idf.py set-target esp32s2
+# sdkconfig.defaults — 24S Smart Hub ESP32-S3
+# These override IDF defaults. Run: idf.py set-target esp32s3
 
-CONFIG_IDF_TARGET="esp32s2"
+CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # Flash
@@ -11,12 +11,12 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
-CONFIG_FREERTOS_UNICORE=y          # ESP32-S2 is single core
+CONFIG_FREERTOS_UNICORE=y          # Preserve the existing single-core task scheduling
 
 # Wi-Fi
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
-CONFIG_ESP32S2_WIFI_STATIC_RX_BUFFER_SIZE=1600
+CONFIG_ESP32S3_WIFI_STATIC_RX_BUFFER_SIZE=1600
 
 # MQTT
 CONFIG_MQTT_BUFFER_SIZE=2048
@@ -35,4 +35,3 @@ CONFIG_ADC_CAL_LUT_ENABLE=y
 
 # SPI
 CONFIG_SPI_MASTER_ISR_IN_IRAM=y
-

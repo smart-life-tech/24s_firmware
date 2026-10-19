@@ -9,6 +9,7 @@
 #include "scp_recovery.h"
 #include "config.h"
 #include "hardware_init.h"
+#include "third_wire.h"
 #include "ltc6811.h"
 #include "black_box.h"
 #include "mqtt_telemetry.h"
@@ -16,7 +17,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
-#include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -37,34 +37,9 @@ static void IRAM_ATTR fault_n_isr_handler(void *arg)
     if (scp_evt_queue) xQueueSendFromISR(scp_evt_queue, &evt, NULL);
 }
 
-static void gate_enable_full(void)
-{
-    ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
-    gpio_set_level(PIN_GATE_CTRL, 1);
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    g_sys.gate_state = GATE_FULL_POWER;
-    xSemaphoreGive(g_state_mutex);
-}
-
-static void gate_enable_pwm(uint32_t duty_pct)
-{
-    if (duty_pct > 100U) duty_pct = 100U;
-    uint32_t duty = (duty_pct * LEDC_DUTY_MAX) / 100UL;
-    if (ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty) == ESP_OK &&
-        ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL) == ESP_OK) {
-        xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-        g_sys.gate_state = (duty_pct == 0U) ? GATE_OFF : GATE_PWM;
-        xSemaphoreGive(g_state_mutex);
-    }
-}
-
 static void gate_disable(void)
 {
-    ledc_stop(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
-    gpio_set_level(PIN_GATE_CTRL, 0);
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    g_sys.gate_state = GATE_OFF;
-    xSemaphoreGive(g_state_mutex);
+    gate_hold_off();
 }
 
 static bool trip_window_reached(void)
@@ -200,22 +175,23 @@ void scp_recovery_task(void *arg)
 
             /* Probe only if an output had previously been requested. */
             if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM) {
-                gate_enable_pwm(5U);
-                vTaskDelay(pdMS_TO_TICKS(100));
-                int32_t probe_current = ina240_read_current_ma();
-                uint32_t abs_probe = (probe_current < 0) ? (uint32_t)(-probe_current) : (uint32_t)probe_current;
-                uint32_t oc_limit = g_sys.oc_ma;
-                uint32_t probe_threshold = (oc_limit > 0U) ? (oc_limit * SCP_PROBE_SHORTED_PCT) / 100U : 2000U;
-                if (probe_threshold < 1000U) probe_threshold = 1000U;
+                if (third_wire_apply_recovery_probe(5U)) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    int32_t probe_current = ina240_read_current_ma();
+                    uint32_t abs_probe = (probe_current < 0) ? (uint32_t)(-probe_current) : (uint32_t)probe_current;
+                    uint32_t oc_limit = g_sys.oc_ma;
+                    uint32_t probe_threshold = (oc_limit > 0U) ? (oc_limit * SCP_PROBE_SHORTED_PCT) / 100U : 2000U;
+                    if (probe_threshold < 1000U) probe_threshold = 1000U;
 
-                black_box_write_recovery_attempt(retry_count, abs_probe);
+                    black_box_write_recovery_attempt(retry_count, abs_probe);
 
-                if (abs_probe > probe_threshold || gpio_get_level(PIN_FAULT_N) == 0) {
-                    gate_disable();
-                    xQueueReset(scp_evt_queue);
-                    mqtt_publish_fault("PROBE_SHORTED", probe_current);
-                    ESP_LOGW(TAG, "Recovery probe failed: %d mA", probe_current);
-                    continue;
+                    if (abs_probe > probe_threshold || gpio_get_level(PIN_FAULT_N) == 0) {
+                        gate_disable();
+                        xQueueReset(scp_evt_queue);
+                        mqtt_publish_fault("PROBE_SHORTED", probe_current);
+                        ESP_LOGW(TAG, "Recovery probe failed: %d mA", probe_current);
+                        continue;
+                    }
                 }
             } else {
                 gate_disable();
@@ -234,10 +210,11 @@ void scp_recovery_task(void *arg)
                 break;
             }
 
-            if (restore_mode == MODE_FULL_POWER) {
-                gate_enable_full();
-            } else if (restore_mode == MODE_PWM) {
-                gate_enable_pwm(restore_duty);
+            xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+            g_sys.scp_state = SCP_STATE_GATE_RESTORE;
+            xSemaphoreGive(g_state_mutex);
+            if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM) {
+                third_wire_apply_recovery_mode(restore_mode, restore_duty);
             } else {
                 gate_disable();
             }
@@ -289,12 +266,13 @@ void scp_recovery_enable_gate(void)
 
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     op_mode_t mode = g_sys.op_mode;
-    uint32_t duty = g_sys.pwm_duty_pct;
     xSemaphoreGive(g_state_mutex);
 
-    if (mode == MODE_FULL_POWER) gate_enable_full();
-    else if (mode == MODE_PWM) gate_enable_pwm(duty);
-    else gate_disable();
+    if (mode == MODE_FULL_POWER || mode == MODE_PWM) {
+        third_wire_refresh_output();
+    } else {
+        gate_disable();
+    }
 }
 
 void scp_clear_permanent_fault(void)

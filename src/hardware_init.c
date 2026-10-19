@@ -31,6 +31,32 @@ static esp_err_t init_gpio(void)
     if (err != ESP_OK) return err;
     gpio_set_level(PIN_GATE_CTRL, 0);
 
+    gpio_config_t third_wire_cfg = {
+        .pin_bit_mask = (1ULL << PIN_THIRD_WIRE),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    err = gpio_config(&third_wire_cfg);
+    if (err != ESP_OK) return err;
+
+    if (MASTER_SWITCH_GPIO == PIN_THIRD_WIRE) {
+        ESP_LOGE(TAG, "Master selector cannot share the Third-Wire input GPIO");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (MASTER_SWITCH_GPIO >= 0) {
+        gpio_config_t master_switch_cfg = {
+            .pin_bit_mask = (1ULL << MASTER_SWITCH_GPIO),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_ENABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        err = gpio_config(&master_switch_cfg);
+        if (err != ESP_OK) return err;
+    }
+
     gpio_config_t fault_cfg = {
         .pin_bit_mask = (1ULL << PIN_FAULT_N),
         .mode         = GPIO_MODE_INPUT,
@@ -128,8 +154,7 @@ static esp_err_t init_adc(void)
     err = adc1_config_channel_atten(PIN_INA240_ADC, ADC_ATTEN_DB_11);
     if (err != ESP_OK) return err;
 
-    /* esp_adc_cal_characterize() returns a calibration source enum, not ESP_OK.
-     * The call is valid for ESP32-S2 ADC calibration and should not be treated as an error code. */
+    /* esp_adc_cal_characterize() returns a calibration source enum, not ESP_OK. */
     (void)esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11,
                                     ADC_WIDTH_BIT_13, 1100, &g_adc_chars);
     ESP_LOGI(TAG, "ADC initialized");

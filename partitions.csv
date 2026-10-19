@@ -1,5 +1,5 @@
 # Partition table for 24S Smart Hub
-# ESP32-S2-WROVER-I has 4MB internal flash
+# ESP32-S3-WROOM-1U-N4R2 has 4MB internal flash
 # Name,   Type, SubType,  Offset,   Size,    Flags
 nvs,      data, nvs,      0x9000,   0x6000,
 phy_init, data, phy,      0xF000,   0x1000,
