@@ -36,10 +36,6 @@ extern char g_device_id[DEVICE_ID_MAX_LEN];
 
 #define PIN_POT_ADC_CH      ADC1_CHANNEL_7   // GPIO8
 #define PIN_POT_ADC_GPIO    GPIO_NUM_8
-/* The master-selector GPIO is not present in the supplied netlist/project.
- * Keep it unassigned rather than aliasing the independent Third-Wire input. */
-#define MASTER_SWITCH_GPIO  GPIO_NUM_NC
-#define MASTER_SWITCH_HIGH_IS_100PCT 1
 
 #define POT_OVERSAMPLE_N    32
 #define POT_DEADBAND_LOW    410U
@@ -162,8 +158,9 @@ typedef struct {
     int8_t            wifi_rssi;
     uint32_t          soc_percent_x10;
     uint32_t          retry_count;
-    bool              pwm_remote_override;
-    bool              third_wire_active;
+    bool              output_enable_requested;
+    bool              third_wire_high;
+    bool              third_wire_valid;
     bool              fault_active;
     uint32_t          protection_fault_mask;
     uint32_t          ov_mv;

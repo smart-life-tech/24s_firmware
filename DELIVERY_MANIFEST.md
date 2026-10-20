@@ -9,7 +9,7 @@ This package is the firmware-to-final-PCB reconciliation for the 24S SmartHub fi
 - ESP32-S3-WROOM-1U-N4R2
 - GPIO4: main gate / 20 kHz PWM
 - GPIO6: FAULT_N
-- GPIO47: Third-Wire activation input (module pad 24 per the supplied netlist mapping)
+- GPIO47: Third-Wire 50%/100% selector (LOW=50%, HIGH=100%; module pad 24 per the supplied netlist mapping)
 - J9: pin 1 `third_wire`, pin 2 `-VIN` return (per supplied hardware requirements; schematic/netlist not included here)
 - SPI: MOSI GPIO39, MISO GPIO37, SCK GPIO38, CS GPIO13
 - INA240 ADC: GPIO2 / ADC1_CH1
@@ -23,8 +23,9 @@ This package is the firmware-to-final-PCB reconciliation for the 24S SmartHub fi
 - LTC6811-1 two-device / 24-cell monitoring
 - Four-NTC telemetry
 - GPIO4 gate control and 20 kHz PWM
-- GPIO47 Third-Wire hard interlock with inactive pull-down and 200 ms debounce
-- Main-output mode requests retained while Third-Wire is inactive; they cannot energize GPIO4 until Third-Wire is active
+- GPIO47 Third-Wire power-level selector with 200 ms debounce
+- MQTT/app commands request output ON/OFF; GPIO47 exclusively selects 50% or 100%
+- Output defaults OFF after boot/reset and requires a fresh activation command
 - Removal of PREBIAS and nRF24/RF handshake dependencies
 - 93 V software pack cutoff
 - Hardware-fault observation and recovery state machine
@@ -49,8 +50,10 @@ Physical validation of the assembled PCB remains separate from this firmware han
 
 ## Outstanding hardware integration
 
-- The master-switch GPIO is not assigned in the supplied project. `MASTER_SWITCH_GPIO` remains unassigned; GPIO47 is reserved exclusively for Third-Wire. Firmware supports a separate selector configured so HIGH selects 100% and LOW selects 50%, but that physical selection is not active until the actual selector GPIO is provided and verified against the schematic/netlist.
-- Current command priority is: fault/protection shutdown first; Third-Wire LOW always inhibits GPIO4; an explicit MQTT/app OFF also keeps the requested operating mode OFF; with a non-OFF mode request, stable Third-Wire HIGH permits output. This preserves an explicit remote OFF action, but it means a HIGH input does not override a remote OFF. If Third-Wire must force output on regardless of MQTT/app OFF, that conflicts with preserving remote shutdown behavior and needs an explicit priority decision.
+- The PCB has no separate master-switch GPIO. The Third-Wire input itself is the selector: LOW selects 50%, HIGH selects 100%. Neither level enables output.
+- Command priority is: fault/protection shutdown first; MQTT/app OFF disables output; MQTT/app ON enables output at the current GPIO47-selected level. PWM commands are treated only as enable requests (nonzero duty) or OFF (zero); they cannot override the 50%/100% selector. ON is rejected while a fault is active.
+- Retained MQTT gate/PWM enable messages are ignored so a broker-retained ON cannot defeat the reset-to-OFF requirement; retained OFF remains accepted.
+- GPIO47 LOW is also the pulled-down/open-wire state. This only selects 50%; it cannot enable output. Output remains OFF through boot/reset until a fresh MQTT/app activation command.
 - The existing SPI assignment uses GPIO39/37/38. Confirm these signals are actually available at the ESP32-S3-WROOM-1U-N4R2 module pads and are not consumed by the fitted flash/PSRAM configuration before manufacturing. No replacement SPI pins were guessed without the PCB/netlist.
 - The firmware uses the requested GPIO47 input. The module-pad-24 association and J9 routing are reported from the supplied hardware requirements but could not be cross-checked against the missing KiCad files; verify both against the released module datasheet and netlist.
 - The KiCad schematic, PCB, and netlist were not present in the supplied repository. Connector/J9 routing and all component designators/values therefore could not be independently checked.

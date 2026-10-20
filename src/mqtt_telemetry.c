@@ -93,7 +93,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
 
     case MQTT_EVENT_DATA:
         mqtt_handle_command(event->topic, event->topic_len,
-                            event->data, event->data_len);
+                            event->data, event->data_len, event->retain);
         break;
 
     case MQTT_EVENT_ERROR:
@@ -106,7 +106,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
 }
 
 void mqtt_handle_command(const char *topic, int topic_len,
-                         const char *data, int data_len)
+                         const char *data, int data_len, bool retained)
 {
     char topic_str[128] = {0};
     char data_str[256] = {0};
@@ -125,13 +125,21 @@ void mqtt_handle_command(const char *topic, int topic_len,
             (!strcmp(action->valuestring, "ON") ||
              !strcmp(action->valuestring, "OFF") ||
              !strcmp(action->valuestring, "PWM"))) {
-            third_wire_set_mode_from_mqtt(action->valuestring);
+            if (retained && strcmp(action->valuestring, "OFF") != 0) {
+                ESP_LOGW(TAG, "Ignoring retained output-enable command");
+            } else {
+                third_wire_set_mode_from_mqtt(action->valuestring);
+            }
         }
     } else if (strstr(topic_str, "cmd/pwm")) {
         cJSON *duty = cJSON_GetObjectItemCaseSensitive(json, "duty");
         if (cJSON_IsNumber(duty) && isfinite(duty->valuedouble) &&
             duty->valuedouble >= 0.0 && duty->valuedouble <= 100.0) {
-            third_wire_set_pwm_duty((uint32_t)duty->valuedouble);
+            if (retained && duty->valuedouble > 0.0) {
+                ESP_LOGW(TAG, "Ignoring retained PWM output-enable command");
+            } else {
+                third_wire_set_pwm_duty(duty->valuedouble == 0.0 ? 0U : 100U);
+            }
         } else {
             ESP_LOGW(TAG, "Rejected invalid PWM duty");
         }

@@ -41,22 +41,6 @@ static esp_err_t init_gpio(void)
     err = gpio_config(&third_wire_cfg);
     if (err != ESP_OK) return err;
 
-    if (MASTER_SWITCH_GPIO == PIN_THIRD_WIRE) {
-        ESP_LOGE(TAG, "Master selector cannot share the Third-Wire input GPIO");
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (MASTER_SWITCH_GPIO >= 0) {
-        gpio_config_t master_switch_cfg = {
-            .pin_bit_mask = (1ULL << MASTER_SWITCH_GPIO),
-            .mode         = GPIO_MODE_INPUT,
-            .pull_up_en   = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_ENABLE,
-            .intr_type    = GPIO_INTR_DISABLE,
-        };
-        err = gpio_config(&master_switch_cfg);
-        if (err != ESP_OK) return err;
-    }
-
     gpio_config_t fault_cfg = {
         .pin_bit_mask = (1ULL << PIN_FAULT_N),
         .mode         = GPIO_MODE_INPUT,

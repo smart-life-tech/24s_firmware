@@ -127,8 +127,7 @@ void scp_recovery_task(void *arg)
         g_sys.retry_count++;
         uint32_t retry_count = g_sys.retry_count;
         uint32_t pack_v = g_sys.pack_voltage_mv;
-        op_mode_t restore_mode = g_sys.op_mode;
-        uint32_t restore_duty = g_sys.pwm_duty_pct;
+        bool restore_output_requested = g_sys.output_enable_requested;
         xSemaphoreGive(g_state_mutex);
 
         protection_set_fault(PROT_FAULT_SCP, false);
@@ -146,6 +145,7 @@ void scp_recovery_task(void *arg)
             g_sys.scp_state = SCP_STATE_PERMANENT_FAULT;
             g_sys.permanent_fault = true;
             g_sys.fault_active = true;
+            g_sys.output_enable_requested = false;
             xSemaphoreGive(g_state_mutex);
             protection_set_fault(PROT_FAULT_SCP, true);
             gate_disable();
@@ -169,12 +169,11 @@ void scp_recovery_task(void *arg)
 
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             g_sys.scp_state = SCP_STATE_RETRY_PROBE;
-            restore_mode = g_sys.op_mode;
-            restore_duty = g_sys.pwm_duty_pct;
+            restore_output_requested = g_sys.output_enable_requested;
             xSemaphoreGive(g_state_mutex);
 
             /* Probe only if an output had previously been requested. */
-            if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM) {
+            if (restore_output_requested) {
                 if (third_wire_apply_recovery_probe(5U)) {
                     vTaskDelay(pdMS_TO_TICKS(100));
                     int32_t probe_current = ina240_read_current_ma();
@@ -213,8 +212,8 @@ void scp_recovery_task(void *arg)
             xSemaphoreTake(g_state_mutex, portMAX_DELAY);
             g_sys.scp_state = SCP_STATE_GATE_RESTORE;
             xSemaphoreGive(g_state_mutex);
-            if (restore_mode == MODE_FULL_POWER || restore_mode == MODE_PWM) {
-                third_wire_apply_recovery_mode(restore_mode, restore_duty);
+            if (restore_output_requested) {
+                third_wire_apply_recovery_mode();
             } else {
                 gate_disable();
             }
@@ -264,15 +263,7 @@ void scp_recovery_enable_gate(void)
         return;
     }
 
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    op_mode_t mode = g_sys.op_mode;
-    xSemaphoreGive(g_state_mutex);
-
-    if (mode == MODE_FULL_POWER || mode == MODE_PWM) {
-        third_wire_refresh_output();
-    } else {
-        gate_disable();
-    }
+    third_wire_refresh_output();
 }
 
 void scp_clear_permanent_fault(void)

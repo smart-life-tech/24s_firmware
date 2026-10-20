@@ -41,8 +41,9 @@ system_state_t g_sys = {
     .permanent_fault  = false,
     .wifi_connected   = false,
     .boot_complete    = false,
-    .pwm_remote_override = false,
-    .third_wire_active = false,
+    .output_enable_requested = false,
+    .third_wire_high = false,
+    .third_wire_valid = false,
 };
 
 SemaphoreHandle_t g_state_mutex;

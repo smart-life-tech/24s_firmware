@@ -25,7 +25,6 @@ void config_load_from_nvs(void)
     g_sys.uv_mv = UV_MV_LIFEPO4;
     g_sys.oc_ma = OC_MA_DEFAULT;
     g_sys.bal_delta_mv = BAL_DELTA_MV;
-    g_sys.pwm_duty_pct = 50U;
     g_sys.chemistry = CHEM_LIFEPO4;
 
     nvs_handle_t h;
@@ -47,8 +46,6 @@ void config_load_from_nvs(void)
         g_sys.oc_ma = clamp_u32(v, OC_MA_MIN, OC_MA_MAX, OC_MA_DEFAULT);
     if (nvs_get_u32(h, "bal_mv", &v) == ESP_OK)
         g_sys.bal_delta_mv = clamp_u32(v, 5U, 500U, BAL_DELTA_MV);
-    if (nvs_get_u32(h, "duty", &v) == ESP_OK)
-        g_sys.pwm_duty_pct = (v > 100U) ? 50U : v;
 
     uint8_t chem = 0U;
     if (nvs_get_u8(h, "chem", &chem) == ESP_OK) {
@@ -74,7 +71,6 @@ void config_save_to_nvs(void)
     err |= nvs_set_u32(h, "uv_mv", g_sys.uv_mv);
     err |= nvs_set_u32(h, "oc_ma", g_sys.oc_ma);
     err |= nvs_set_u32(h, "bal_mv", g_sys.bal_delta_mv);
-    err |= nvs_set_u32(h, "duty", g_sys.pwm_duty_pct);
     err |= nvs_set_u8(h, "chem", (uint8_t)g_sys.chemistry);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
@@ -89,8 +85,12 @@ void protection_set_fault(uint32_t mask, bool latch_permanent)
     xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     g_sys.protection_fault_mask |= mask;
     g_sys.fault_active = true;
+    if ((mask & ~PROT_FAULT_SCP) != 0U) {
+        g_sys.output_enable_requested = false;
+    }
     if (latch_permanent) {
         g_sys.permanent_fault = true;
+        g_sys.output_enable_requested = false;
     }
     xSemaphoreGive(g_state_mutex);
 }

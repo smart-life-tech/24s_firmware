@@ -11,7 +11,6 @@
 #include "config.h"
 #include "third_wire.h"
 #include "driver/ledc.h"
-#include "driver/gpio.h"
 #include "driver/adc.h"         
 #include "esp_adc_cal.h"
 #include "esp_log.h"
@@ -85,11 +84,6 @@ uint32_t pot_read_duty_pct(void)
 
         if (duty_pct > 100U) duty_pct = 100U;
         if (duty_pct < 1U)   duty_pct = 1U;
-    }
-
-    if (MASTER_SWITCH_GPIO >= 0 && gpio_get_level(MASTER_SWITCH_GPIO) == 1) {
-        ESP_LOGD(TAG, "pot: Master Switch HIGH : duty forced 100%%");
-        return 100U;
     }
 
     ESP_LOGD(TAG, "pot: adc_avg=%u  duty=%u%%", adc_avg, duty_pct);
