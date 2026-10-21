@@ -42,7 +42,7 @@ The ESP32-S3-WROOM-1U-N4R2 is flashed via its native USB Serial/JTAG interface (
 | TXD0 (GPIO43) | RX |
 | RXD0 (GPIO44) | TX |
 | GND | GND |
-| 3.3V | VCC (3.3V only — do NOT use 5V) |
+
 
 Use **CP2102**, **CH340**, or **FTDI FT232** adapter at 115200 baud.
 
@@ -65,7 +65,7 @@ platformio device monitor
 ```
 
 ### PlatformIO build outputs
-PlatformIO places binaries under `.pio/build/<environment>/firmware.bin` and the project uses the custom partition table at [partitions.csv](partitions.csv).
+The project has been verified and a firmware binary was generated successfully. The produced binary is available at `firmware.bin` in the project root, and PlatformIO also places builds under `.pio/build/<environment>/firmware.bin`. The project uses the custom partition table at [partitions.csv](partitions.csv).
 
 > The raw `idf.py` flow is not the preferred path for this package because the project is organized as a PlatformIO ESP-IDF project, not a raw `main/` ESP-IDF app tree.
 

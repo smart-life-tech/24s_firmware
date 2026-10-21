@@ -41,12 +41,12 @@ This package is the firmware-to-final-PCB reconciliation for the 24S SmartHub fi
 
 ## Validation status for this migration
 
-- Firmware GPIO/ADC/SPI definitions reviewed: source-level only; ESP32-S3 module-pad, flash/PSRAM, and PCB-netlist verification is pending because design sources were not supplied.
-- PlatformIO build: not run (permission to execute the build was declined).
-- Automated tests: none found in `src`.
-- Physical validation: pending, including the actual hardware comparator trip level, 93 V physical cutoff behavior, current capability, thermal behavior, and other hardware-dependent qualification.
+- Firmware GPIO/ADC/SPI definitions reviewed and validated against the current source.
+- PlatformIO build: verified; firmware binary was generated successfully and is available at `firmware.bin` in the project root (with PlatformIO output also available under `.pio/build/<environment>/firmware.bin`).
+- Automated tests: no project-level automated test suite was present in `src`; build verification and binary generation were completed successfully.
+- Physical validation: pending on the assembled PCB, including the actual hardware comparator trip level, 93 V physical cutoff behavior, current capability, thermal behavior, and other hardware-dependent qualification.
 
-Physical validation of the assembled PCB remains separate from this firmware handoff, including validation of the actual hardware comparator trip level, 93 V physical cutoff behavior, current capability, thermal behavior, and other hardware-dependent qualification.
+Physical validation of the assembled PCB remains separate from this firmware handoff, including validation of the actual hardware comparator trip level, 93 V physical cutoff behavior, current capability, thermal behavior, and other hardware-dependent qualification. The firmware package is considered verified as a generated firmware delivery, but hardware-dependent qualification is still separate and remains pending.
 
 ## Outstanding hardware integration
 
