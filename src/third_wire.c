@@ -1,5 +1,5 @@
 /**
- * third_wire.c — Third-Wire power selection and centralized gate control
+ * third_wire.c — Third-Wire trigger input and centralized gate control
  */
 
 #include "third_wire.h"
@@ -72,8 +72,10 @@ void third_wire_refresh_output(void)
         xSemaphoreGive(g_state_mutex);
         return;
     }
-    op_mode_t mode = g_sys.third_wire_high ? MODE_FULL_POWER : MODE_PWM;
-    uint32_t duty = g_sys.third_wire_high ? 100U : 50U;
+
+    const bool output_requested = g_sys.output_enable_requested;
+    const op_mode_t mode = output_requested ? MODE_FULL_POWER : MODE_OFF;
+    const uint32_t duty = output_requested ? 100U : 0U;
     g_sys.op_mode = mode;
     g_sys.pwm_duty_pct = duty;
     if (output_inhibited_locked(false)) {
@@ -97,14 +99,12 @@ static void set_output_enabled(bool enabled)
         return;
     }
     g_sys.output_enable_requested = enabled;
-    op_mode_t selected_mode = g_sys.third_wire_valid ?
-                              (g_sys.third_wire_high ? MODE_FULL_POWER : MODE_PWM) :
-                              MODE_OFF;
+    op_mode_t selected_mode = enabled ? MODE_FULL_POWER : MODE_OFF;
     xSemaphoreGive(g_state_mutex);
 
     third_wire_refresh_output();
     ESP_LOGI(TAG, "Remote output request: %s", enabled ? "ON" : "OFF");
-    black_box_write_gate_change(enabled ? selected_mode : MODE_OFF);
+    black_box_write_gate_change(selected_mode);
 }
 
 void third_wire_task(void *arg)
@@ -165,10 +165,10 @@ void third_wire_task(void *arg)
             g_sys.third_wire_valid = true;
             xSemaphoreGive(g_state_mutex);
             if (changed) {
-                ESP_LOGI(TAG, "Third-Wire selected %s power",
-                         candidate_high ? "100%" : "50%");
+                ESP_LOGI(TAG, "Third-Wire trigger %s; output power remains controlled by enable request",
+                         candidate_high ? "asserted" : "cleared");
                 third_wire_refresh_output();
-                mqtt_publish_gate_state_change(candidate_high ? MODE_FULL_POWER : MODE_PWM);
+                mqtt_publish_gate_state_change(g_sys.op_mode);
             }
         }
     }
@@ -195,8 +195,9 @@ void third_wire_apply_recovery_mode(void)
         xSemaphoreGive(g_state_mutex);
         return;
     }
-    op_mode_t mode = g_sys.third_wire_high ? MODE_FULL_POWER : MODE_PWM;
-    uint32_t duty_pct = g_sys.third_wire_high ? 100U : 50U;
+    const bool output_requested = g_sys.output_enable_requested;
+    op_mode_t mode = output_requested ? MODE_FULL_POWER : MODE_OFF;
+    uint32_t duty_pct = output_requested ? 100U : 0U;
     g_sys.op_mode = mode;
     g_sys.pwm_duty_pct = duty_pct;
     drive_output_locked(mode, duty_pct);
@@ -228,7 +229,7 @@ void third_wire_set_pwm_duty(uint32_t duty_pct)
         ESP_LOGW(TAG, "Rejected invalid PWM duty %u%%", (unsigned)duty_pct);
         return;
     }
-    ESP_LOGI(TAG, "PWM command %u%% mapped to %s; GPIO47 selects output level",
+    ESP_LOGI(TAG, "PWM command %u%% mapped to %s; GPIO47 remains trigger-only",
              (unsigned)duty_pct, duty_pct == 0U ? "OFF" : "ON");
     set_output_enabled(duty_pct != 0U);
 

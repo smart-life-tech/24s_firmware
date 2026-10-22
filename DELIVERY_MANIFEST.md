@@ -9,7 +9,7 @@ This package is the firmware-to-final-PCB reconciliation for the 24S SmartHub fi
 - ESP32-S3-WROOM-1U-N4R2
 - GPIO4: main gate / 20 kHz PWM
 - GPIO6: FAULT_N
-- GPIO47: Third-Wire 50%/100% selector (LOW=50%, HIGH=100%; module pad 24 per the supplied netlist mapping)
+- GPIO47: Third-Wire ON/OFF trigger (debounced; module pad 24 per the supplied netlist mapping)
 - J9: pin 1 `third_wire`, pin 2 `-VIN` return (per supplied hardware requirements; schematic/netlist not included here)
 - SPI: MOSI GPIO39, MISO GPIO37, SCK GPIO38, CS GPIO13
 - INA240 ADC: GPIO2 / ADC1_CH1
@@ -23,8 +23,8 @@ This package is the firmware-to-final-PCB reconciliation for the 24S SmartHub fi
 - LTC6811-1 two-device / 24-cell monitoring
 - Four-NTC telemetry
 - GPIO4 gate control and 20 kHz PWM
-- GPIO47 Third-Wire power-level selector with 200 ms debounce
-- MQTT/app commands request output ON/OFF; GPIO47 exclusively selects 50% or 100%
+- GPIO47 Third-Wire trigger with 200 ms debounce
+- MQTT/app commands request output ON/OFF; GPIO47 does not select a power level
 - Output defaults OFF after boot/reset and requires a fresh activation command
 - Removal of PREBIAS and nRF24/RF handshake dependencies
 - 93 V software pack cutoff
@@ -50,10 +50,10 @@ Physical validation of the assembled PCB remains separate from this firmware han
 
 ## Outstanding hardware integration
 
-- The PCB has no separate master-switch GPIO. The Third-Wire input itself is the selector: LOW selects 50%, HIGH selects 100%. Neither level enables output.
-- Command priority is: fault/protection shutdown first; MQTT/app OFF disables output; MQTT/app ON enables output at the current GPIO47-selected level. PWM commands are treated only as enable requests (nonzero duty) or OFF (zero); they cannot override the 50%/100% selector. ON is rejected while a fault is active.
+- The PCB has no separate master-switch GPIO. GPIO47 is an ON/OFF trigger only; it does not set the output power level.
+- Command priority is: fault/protection shutdown first; MQTT/app OFF disables output; MQTT/app ON enables output. PWM commands are treated only as enable requests (nonzero duty) or OFF (zero); they cannot override GPIO47 or set a separate power level. ON is rejected while a fault is active.
 - Retained MQTT gate/PWM enable messages are ignored so a broker-retained ON cannot defeat the reset-to-OFF requirement; retained OFF remains accepted.
-- GPIO47 LOW is also the pulled-down/open-wire state. This only selects 50%; it cannot enable output. Output remains OFF through boot/reset until a fresh MQTT/app activation command.
+- GPIO47 LOW is also the pulled-down/open-wire state. This only indicates the trigger is inactive; it cannot enable the output. Output remains OFF through boot/reset until a fresh MQTT/app activation command.
 - The existing SPI assignment uses GPIO39/37/38. Confirm these signals are actually available at the ESP32-S3-WROOM-1U-N4R2 module pads and are not consumed by the fitted flash/PSRAM configuration before manufacturing. No replacement SPI pins were guessed without the PCB/netlist.
 - The firmware uses the requested GPIO47 input. The module-pad-24 association and J9 routing are reported from the supplied hardware requirements but could not be cross-checked against the missing KiCad files; verify both against the released module datasheet and netlist.
 - The KiCad schematic, PCB, and netlist were not present in the supplied repository. Connector/J9 routing and all component designators/values therefore could not be independently checked.

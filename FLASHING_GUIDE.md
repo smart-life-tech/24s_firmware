@@ -213,7 +213,7 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 │   ├── hardware_init.c     ← GPIO, LEDC, SPI, ADC init
 │   ├── ltc6811.c           ← LTC6811 isoSPI driver + cell monitoring task
 │   ├── scp_recovery.c      ← Hardware SCP + recovery state machine
-│   ├── third_wire.c        ← GPIO47 50%/100% selector + GPIO4 gate arbitration
+│   ├── third_wire.c        ← GPIO47 trigger input + GPIO4 gate arbitration
 │   ├── pwm_mode.c          ← LEDC PWM helpers (20kHz, 11-bit)
 │   ├── black_box.c         ← Offline bounded logger with explicit full-buffer reset policy
 │   ├── mqtt_telemetry.c    ← Bidirectional MQTT JSON telemetry
@@ -222,27 +222,27 @@ mosquitto_pub -h localhost -t "hub/24S-HUB-001/cmd/config" \
 └── FLASHING_GUIDE.md       ← Build and flash instructions
 ```
 
-### Third-Wire power selector and output activation
+### Third-Wire trigger and output activation
 
 J9 pin 1 is the Third-Wire signal and pin 2 is the `-VIN` return. Firmware
-configures GPIO47 as a pulled-down input with 200 ms debounce. LOW selects
-50% PWM and HIGH selects 100% output. Neither selector level enables the
-output. The PCB has no separate master-switch GPIO; GPIO47 is the 50%/100%
-selector.
+configures GPIO47 as a pulled-down input with 200 ms debounce. GPIO47 is a
+trigger input only: it is not used to select 50% or 100% output power.
+The PCB has no separate master-switch GPIO; GPIO47 is treated as an ON/OFF
+command gate and must not change the PWM duty or power mode.
 
 The main output defaults OFF at boot/reset and does not restore a saved ON
-state. A fresh MQTT/app ON command enables the output at the currently
-selected GPIO47 level; OFF disables it regardless of the selector. PWM
-commands are treated as enable requests (any nonzero duty) or OFF (zero duty);
-the requested duty does not override GPIO47. ON requests are rejected while
-a fault is active. Fault/protection shutdown always takes priority. RF remote
-control is not implemented in this firmware package.
+state. A fresh MQTT/app ON command enables the output; OFF disables it
+regardless of the GPIO47 state. PWM commands are treated as enable requests
+(any nonzero duty) or OFF (zero duty); the requested duty does not override
+the trigger. ON requests are rejected while a fault is active.
+Fault/protection shutdown always takes priority. RF remote control is not
+implemented in this firmware package.
 Retained MQTT gate/PWM enable commands are ignored so a broker-stored ON state
 cannot energize the output after reconnect or reset; retained OFF remains safe.
 
-An open GPIO47 input reads LOW through its pull-down and therefore selects
-50%, but does not enable the output. A fresh activation command is still
-required.
+An open GPIO47 input reads LOW through its pull-down and therefore indicates an
+inactive trigger, but it does not enable the output. A fresh activation
+command is still required.
 
 GPIO47 is a 3.3 V logic input, not a `-VIN`-tolerant pin. Verify the J9 input
 conditioning, return reference, and fault protection in the schematic before
