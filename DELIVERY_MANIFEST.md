@@ -48,6 +48,30 @@ This package is the firmware-to-final-PCB reconciliation for the 24S SmartHub fi
 
 Physical validation of the assembled PCB remains separate from this firmware handoff, including validation of the actual hardware comparator trip level, 93 V physical cutoff behavior, current capability, thermal behavior, and other hardware-dependent qualification. The firmware package is considered verified as a generated firmware delivery, but hardware-dependent qualification is still separate and remains pending.
 
+## Delivered revision exclusions (not implemented)
+
+The delivered firmware revision is the generated firmware package for the current
+PCB reconciliation; it is not a complete hardware-qualified implementation of the
+full product requirement set. The following items are explicitly not included in
+this delivered revision:
+
+- Separate 50% / 100% master-switch function: not implemented. GPIO47 remains a
+  Third-Wire ON/OFF trigger only and does not select 50% or 100% output power.
+- RF remote support is absent from this firmware package; no RF command path was
+  available to integrate or verify.
+- No separate master-switch GPIO is present in the firmware logic. The PCB has no
+  dedicated power-level switch input; GPIO47 is treated as a gate trigger only.
+- Hardware comparator and protection values were not included in the firmware
+  delivery; these must come from the released schematic/BOM and assembled hardware.
+- Full hardware-dependent qualification remains pending on the assembled PCB,
+  including actual comparator trip level, 93 V cutoff behavior, current capability,
+  thermal behavior, and fault-path verification.
+
+This revision therefore represents the current firmware handoff package only. It
+must not be treated as implementing a separate 50%/100% master-switch function or
+RF remote capability unless those features are later added in a subsequent
+revision with matching hardware and validation.
+
 ## Outstanding hardware integration
 
 - The PCB has no separate master-switch GPIO. GPIO47 is an ON/OFF trigger only; it does not set the output power level.

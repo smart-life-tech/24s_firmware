@@ -250,7 +250,55 @@ connecting an external Third-Wire source or manufacturing the board.
 
 ---
 
-## 9. DEVELOPMENT WORKFLOW
+## 9. DELIVERED REVISION EXCLUSIONS (NOT IMPLEMENTED)
+
+The delivered firmware revision is the generated firmware package for the current
+PCB reconciliation and is not a complete hardware-qualified implementation of the
+full product requirement set. The following elements are explicitly not included
+in this delivered revision:
+
+| Requirement / feature | Status in delivered revision | Notes |
+|---|---|---|
+| Separate 50% / 100% master-switch function | ❌ Not implemented | The final revision uses GPIO47 as a 3.3 V ON/OFF trigger only; it does not select 50% or 100% output power and does not provide a distinct master-switch level selection. |
+| RF remote / RF command path | ❌ Excluded | RF support is absent from this firmware package. No RF command path was available to integrate or verify. |
+| Separate master-switch GPIO on PCB | ❌ Not present in this firmware logic | The PCB has no separate master-switch GPIO. GPIO47 remains the ON/OFF gate and cannot set power mode. |
+| Hardware protection comparator / trip values | ❌ Not covered by firmware package | Firmware thresholds are software limits only and are not a substitute for the release schematic/BOM or the actual hardware comparator trip behavior. |
+| Full hardware validation of comparator and output-switch behavior | ❌ Pending assembled-board checks | Actual trip level, 93 V cutoff behavior, current capability, thermal performance, and switching verification remain hardware-dependent. |
+
+The key practical point for the delivered build is that the output does not
+automatically implement a separate 50%/100% master-switch function. In this
+revision, the trigger input is simply an enable gate: it can gate ON/OFF, but it
+cannot choose a different power mode or output level. The RF exclusion and the
+absence of a separate master-switch GPIO are therefore both part of the current
+delivery scope and should be treated as explicit differences from any fuller
+product requirement set.
+
+### Final delivered package status
+
+This revision is the generated firmware delivery package for the current board
+state, represented by the built binary in the project root and the packaged
+release bundle (`firmware_24s.zip` / generated firmware outputs from PlatformIO).
+It is valid as a firmware handoff and build artifact, but it is not a full
+hardware-qualified final product package until the assembled PCB checks below
+have been completed.
+
+### Remaining checks that require assembled hardware
+
+- Confirm the actual J9 / GPIO47 conditioning and return reference on the
+  assembled PCB and verify the trigger is valid relative to ESP32-S3 3.3 V logic.
+- Confirm the actual hardware comparator trip threshold and 93 V pack cutoff
+  behavior on the assembled board.
+- Validate the real current capability, thermal behavior, and fault shutdown path
+  under load.
+- Verify the full output-switch / gate path and whether a separate 50%/100%
+  master-switch function is present in the hardware design or still absent.
+- Verify any RF remote hardware path if RF functionality is later required.
+- Cross-check the final PCB netlist/KiCad release against the firmware GPIO map
+  and connector assignments before committing to manufacturing or field release.
+
+---
+
+## 10. DEVELOPMENT WORKFLOW
 
 ```bash
 # Primary project workflow:
@@ -266,7 +314,7 @@ platformio device monitor
 
 ---
 
-## 10. PHASE DELIVERY CHECKLIST
+## 11. PHASE DELIVERY CHECKLIST
 
 | Phase | Scope | Status |
 |---|---|---|
